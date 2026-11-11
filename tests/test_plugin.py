@@ -1,0 +1,257 @@
+import re
+
+import pytest
+
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+SUITE = """
+import pytest
+
+def test_ok():
+    assert 1 + 1 == 2
+
+def test_broken():
+    values = [1, 2]
+    assert values == [1, 3]
+
+@pytest.mark.skip(reason="later")
+def test_skipped():
+    pass
+
+@pytest.mark.xfail
+def test_known_bug():
+    assert False
+"""
+
+
+def run(pytester, *args):
+    result = pytester.runpytest_subprocess(*args)
+    text = ANSI.sub("", "\n".join(result.outlines))
+    return result, text
+
+
+def test_reports_a_green_run(pytester):
+    pytester.makepyfile("def test_one(): pass\ndef test_two(): pass\n")
+    result, out = run(pytester, "--glow")
+    assert result.ret == 0
+    assert "ALL GREEN" in out
+    assert "2 passed" in out
+    assert "test_reports_a_green_run.py" in out
+
+
+def test_reports_failures_with_rich_tracebacks(pytester):
+    pytester.makepyfile(SUITE)
+    result, out = run(pytester, "--glow")
+    assert result.ret == 1
+    assert "FAILED" in out
+    assert "1 passed · 1 failed · 1 skipped · 1 xfailed" in out
+    assert "failures (1)" in out
+    assert "Traceback" in out and "values = [1, 2]" in out
+    assert "@py_assert" not in out
+
+
+def test_falls_back_without_a_terminal(pytester):
+    pytester.makepyfile("def test_one(): pass\n")
+    result, out = run(pytester)
+    assert result.ret == 0
+    assert "ALL GREEN" not in out
+    result.stdout.fnmatch_lines(["*1 passed*"])
+
+
+@pytest.mark.parametrize("args", [("--glow", "--no-glow"), ("--glow", "--collect-only")])
+def test_stands_aside(pytester, args):
+    pytester.makepyfile("def test_one(): pass\n")
+    result, out = run(pytester, *args)
+    assert "ALL GREEN" not in out
+    assert result.ret == 0
+
+
+def test_env_var_disables(pytester, monkeypatch):
+    monkeypatch.setenv("PYTEST_GLOW", "0")
+    pytester.makepyfile("def test_one(): pass\n")
+    _, out = run(pytester)
+    assert "✦ glow" not in out
+
+
+def test_collection_errors(pytester):
+    pytester.makepyfile(test_bad="import nonexistent_module_xyz\n", test_good="def test_one(): pass\n")
+    result, out = run(pytester, "--glow")
+    assert result.ret == pytest.ExitCode.INTERRUPTED
+    assert "collection error" in out
+    assert "nonexistent_module_xyz" in out
+
+
+def test_setup_errors_are_errors(pytester):
+    pytester.makepyfile("""
+        import pytest
+
+        @pytest.fixture
+        def db():
+            raise ConnectionError("no db")
+
+        def test_query(db):
+            pass
+    """)
+    result, out = run(pytester, "--glow")
+    assert result.ret == 1
+    assert "1 error" in out
+    assert "error in setup" in out
+    assert "ConnectionError: no db" in out
+
+
+def test_captured_output_of_failures(pytester):
+    pytester.makepyfile("def test_loud():\n    print('hello from the test')\n    assert 0\n")
+    _, out = run(pytester, "--glow")
+    assert "captured stdout call" in out
+    assert "hello from the test" in out
+
+
+def test_history_across_runs(pytester):
+    pytester.makepyfile("def test_one(): pass\n")
+    _, first = run(pytester, "--glow")
+    assert "history starts now" in first
+    _, second = run(pytester, "--glow")
+    assert "2 green runs in a row" in second
+
+    pytester.makepyfile("def test_one(): assert 0\n")
+    _, third = run(pytester, "--glow")
+    assert "newly failing" in third
+
+    pytester.makepyfile("def test_one(): pass\n")
+    _, fourth = run(pytester, "--glow")
+    assert "fixed" in fourth and "back to green" in fourth
+
+
+def test_flaky_tests_are_spotted(pytester):
+    for body in ("pass", "assert 0", "pass", "assert 0"):
+        pytester.makepyfile(f"def test_coin(): {body}\n")
+        _, out = run(pytester, "--glow")
+    assert "flaky" in out
+
+
+def test_warnings_are_summarised(pytester):
+    pytester.makepyfile("""
+        import warnings
+
+        def test_old_api():
+            warnings.warn("old api", DeprecationWarning)
+    """)
+    result, out = run(pytester, "--glow", "-W", "default")
+    assert result.ret == 0
+    assert "warnings (1)" in out
+    assert "DeprecationWarning: old api" in out
+
+
+def test_verbose_lists_every_test(pytester):
+    pytester.makepyfile("def test_alpha(): pass\ndef test_beta(): pass\n")
+    _, out = run(pytester, "--glow", "-v")
+    assert "test_verbose_lists_every_test.py::test_alpha" in out
+    assert "test_verbose_lists_every_test.py::test_beta" in out
+
+
+def test_xdist(pytester):
+    pytest.importorskip("xdist")
+    pytester.makepyfile(SUITE)
+    result, out = run(pytester, "--glow", "-n", "2")
+    assert result.ret == 1
+    assert "2 workers" in out
+    assert "1 passed · 1 failed · 1 skipped · 1 xfailed" in out
+    assert "[gw" not in out
+
+
+def test_other_plugins_terminal_summary_still_runs(pytester):
+    pytester.makeconftest("""
+        def pytest_terminal_summary(terminalreporter):
+            terminalreporter.write_line("coverage: 100%")
+    """)
+    pytester.makepyfile("def test_one(): pass\n")
+    _, out = run(pytester, "--glow")
+    assert "coverage: 100%" in out
+
+
+def test_maxfail_stops_and_says_so(pytester):
+    pytester.makepyfile("def test_a(): assert 0\ndef test_b(): assert 0\ndef test_c(): pass\n")
+    result, out = run(pytester, "--glow", "-x")
+    assert result.ret == 1
+    assert "stopping after 1 failures" in out
+    assert "1/3" in out
+
+
+COVERED = """
+def used(x):
+    if x > 0:
+        return "positive"
+    return "other"
+
+
+def unused():
+    return 42
+"""
+
+
+def test_coverage_is_drawn_and_tracked(pytester):
+    pytest.importorskip("pytest_cov")
+    pytester.makepyfile(mathy=COVERED, test_mathy="from mathy import used\ndef test_used(): assert used(1)\n")
+    result, out = run(pytester, "--glow", "--cov=mathy", "--cov-report=term-missing")
+    assert result.ret == 0
+    assert "coverage" in out and "mathy.py" in out
+    assert "2 missing  4, 8" in out
+    assert "67%" in out and "66%" not in out
+    assert "covered" in out
+    assert "Stmts" not in out  # pytest-cov's own table is gone
+
+    pytester.makepyfile(test_mathy="from mathy import used, unused\ndef test_used(): assert used(1) and unused()\n")
+    _, out = run(pytester, "--glow", "--cov=mathy", "--cov-report=term-missing")
+    assert "vs last run" in out and "▲" in out
+
+
+def test_coverage_fail_under_fails_the_run(pytester):
+    pytest.importorskip("pytest_cov")
+    pytester.makepyfile(mathy=COVERED, test_mathy="from mathy import used\ndef test_used(): assert used(1)\n")
+    result, out = run(pytester, "--glow", "--cov=mathy", "--cov-fail-under=95")
+    assert result.ret == 1
+    assert "below the required 95%" in out
+    assert "FAILED" in out
+    assert "Coverage failure: total of" not in out
+
+
+@pytest.mark.parametrize(
+    ("style", "present", "absent"),
+    [
+        ("no", [], ["failures (1)", "Traceback"]),
+        ("short", ["failures (1)", "assert values == [1, 3]"], ["Traceback (most recent call last)"]),
+        ("long", ["failures (1)", "Traceback (most recent call last)"], []),
+    ],
+)
+def test_respects_tb_style(pytester, style, present, absent):
+    pytester.makepyfile(SUITE)
+    result, out = run(pytester, "--glow", f"--tb={style}")
+    assert result.ret == 1
+    assert "1 failed" in out
+    for text in present:
+        assert text in out
+    for text in absent:
+        assert text not in out
+
+
+def test_summary_waits_for_other_plugins_sessionfinish(pytester):
+    # Plugins may finish their numbers in sessionfinish and print them in terminal_summary.
+    pytester.makeconftest("""
+        state = {}
+
+        def pytest_sessionfinish(session):
+            state["done"] = "numbers ready"
+
+        def pytest_terminal_summary(terminalreporter):
+            terminalreporter.write_line(state.get("done", "numbers missing"))
+    """)
+    pytester.makepyfile("def test_one(): pass\n")
+    _, out = run(pytester, "--glow")
+    assert "numbers ready" in out
+
+
+def test_traceback_paths_are_relative(pytester):
+    pytester.makepyfile("def test_bad():\n    assert 1 == 2\n")
+    _, out = run(pytester, "--glow")
+    assert "test_traceback_paths_are_relative.py:2 in test_bad" in out
+    assert str(pytester.path) not in out

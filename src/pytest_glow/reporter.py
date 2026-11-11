@@ -1,0 +1,844 @@
+"""GlowReporter: pytest's TerminalReporter with a live rich view instead of dots."""
+
+from __future__ import annotations
+
+import contextlib
+import os
+import platform
+import re
+import threading
+import time
+from collections import Counter
+from dataclasses import dataclass, field
+from typing import IO, Any
+
+import pytest
+from _pytest.terminal import TerminalReporter
+from rich.console import Console, Group
+from rich.live import Live
+from rich.panel import Panel
+from rich.progress_bar import ProgressBar
+from rich.spinner import Spinner
+from rich.table import Table
+from rich.text import Text
+
+from . import __version__, render
+from . import coverage as cov
+from .history import History, is_flaky
+
+SUMMARY_EXIT_CODES = (
+    pytest.ExitCode.OK,
+    pytest.ExitCode.TESTS_FAILED,
+    pytest.ExitCode.INTERRUPTED,
+    pytest.ExitCode.USAGE_ERROR,
+    pytest.ExitCode.NO_TESTS_COLLECTED,
+)
+MAX_ACTIVE_FILES = 6
+MAX_RUNNING_TESTS = 5
+SLOW_RUNNING = 0.5  # seconds before a running test shows up in the live view
+
+
+@dataclass
+class FileState:
+    path: str
+    total: int
+    done: int = 0
+    categories: list = field(default_factory=list)
+    counts: Counter = field(default_factory=Counter)
+    duration: float = 0.0
+    started: float | None = None
+    flushed: bool = False
+    spinner: Spinner = field(default_factory=lambda: Spinner("dots", style="cyan"))
+
+
+@dataclass
+class TestState:
+    outcome: str | None = None
+    duration: float = 0.0
+    finished: bool = False
+
+
+@dataclass
+class Failure:
+    report: Any
+    traceback: Any = None
+
+
+_WARNING_LOCATION = re.compile(r"^\S+:\d+: ")
+
+
+def _markup_style(markup: dict) -> str:
+    return " ".join(k for k, v in markup.items() if v and k not in ("flush", "erase"))
+
+
+class _LiveView:
+    def __init__(self, reporter: GlowReporter) -> None:
+        self.reporter = reporter
+
+    def __rich__(self):
+        return self.reporter._render_live()
+
+
+class GlowReporter(TerminalReporter):
+    def __init__(self, config: pytest.Config, stream: IO[str], force: bool = False) -> None:
+        super().__init__(config, stream)
+        color = config.getoption("color", "auto")
+        self.console = Console(
+            file=stream,
+            force_terminal=True if (color == "yes" or force) else None,
+            no_color=color == "no",
+            highlight=False,
+        )
+        self._live_enabled = stream.isatty() and self.console.is_terminal
+        self._live: Live | None = None
+        self._lock = threading.RLock()
+        self._capture_off = config.getoption("capture", "fd") == "no"
+        self._verbose = config.option.verbose
+        # --tb=auto/long get rich tracebacks; short/line/native keep pytest's own text; no hides them.
+        self._tbstyle = config.getoption("tbstyle", "auto")
+        self._suppressed: list[str] = []
+
+        self._files: dict[str, FileState] = {}
+        self._tests: dict[str, TestState] = {}
+        self._running: dict[str, float] = {}
+        self._counts: Counter = Counter()
+        self._failures: list[Failure] = []
+        self._tracebacks: dict[tuple[str, str], Any] = {}
+        self._collect_errors: list[Any] = []
+        self._workers: set[str] = set()
+        self._status = ""
+        self._total = 0
+        self._done = 0
+        self._planned = False
+        self._announced = False
+        self._t_start = time.monotonic()
+        self._t_run: float | None = None
+        self._path_width = 20
+        self._collect_spinner = Spinner("dots", style="magenta")
+        self._history = History(getattr(config, "cache", None))
+        self._coverage: cov.CoverageResult | None = None
+
+    # -- output plumbing ---------------------------------------------------------------
+    # Other plugins (xdist, coverage, ...) write through the terminal reporter. While the
+    # live view is up, their lines go above it instead of tearing through it.
+
+    def _print(self, *renderables: Any) -> None:
+        self.console.print(*renderables, overflow="ellipsis", crop=True, no_wrap=True)
+
+    def write(self, content: str, *, flush: bool = False, **markup: bool) -> None:
+        if "Coverage failure: total of" in content and self.config.pluginmanager.has_plugin("_cov"):
+            self._suppressed.append(content)  # pytest-cov's verdict; ours goes in the final panel
+            return
+        if self._live is None:
+            return super().write(content, flush=flush, **markup)
+        for line in content.splitlines():
+            if line.strip():
+                self._print(Text(line, style=_markup_style(markup)))
+
+    def write_line(self, line: str | bytes, **markup: bool) -> None:
+        if self._live is None:
+            return super().write_line(line, **markup)
+        line = line.decode(errors="replace") if isinstance(line, bytes) else line
+        if line.strip():
+            self._print(Text(line, style=_markup_style(markup)))
+
+    def line(self, msg: str, **kw: bool) -> None:
+        if self._live is None:
+            return super().line(msg, **kw)
+        self.write_line(msg, **kw)
+
+    def rewrite(self, line: str, **markup: bool) -> None:
+        if self._live is None:
+            return super().rewrite(line, **markup)
+        self._status = line.strip()
+
+    def write_sep(self, sep: str, title: str | None = None, fullwidth: int | None = None, **markup: bool) -> None:
+        if self._live is None:
+            return super().write_sep(sep, title, fullwidth, **markup)
+        self.console.rule(title or "", style=_markup_style(markup) or "dim")
+
+    def section(self, title: str, sep: str = "=", **kw: bool) -> None:
+        if self._live is None:
+            return super().section(title, sep, **kw)
+        self.write_sep(sep, title, **kw)
+
+    def ensure_newline(self) -> None:
+        if self._live is None:
+            super().ensure_newline()
+
+    def _start_live(self) -> None:
+        if self._live is not None or not self._live_enabled:
+            return
+        self._live = Live(
+            _LiveView(self),
+            console=self.console,
+            refresh_per_second=12,
+            transient=True,
+            redirect_stdout=self._capture_off,
+            redirect_stderr=self._capture_off,
+        )
+        self._live.start()
+
+    def _stop_live(self) -> None:
+        live, self._live = self._live, None
+        if live is not None:
+            live.stop()
+
+    # -- session & collection ----------------------------------------------------------
+
+    def pytest_sessionstart(self, session: pytest.Session) -> None:
+        self._session = session
+        try:
+            from _pytest import timing
+
+            self._session_start = timing.Instant()
+        except (ImportError, AttributeError):
+            pass
+        self._t_start = time.monotonic()
+        self._adopt_xdist()
+        self._print_header()
+        self._start_live()
+
+    def _adopt_xdist(self) -> None:
+        # xdist may have grabbed the stock reporter before we replaced it.
+        dsession = self.config.pluginmanager.get_plugin("dsession")
+        if dsession is not None and hasattr(dsession, "terminal"):
+            dsession.terminal = self
+        trdist = self.config.pluginmanager.get_plugin("terminaldistreporter")
+        if trdist is not None:
+            trdist.tr = self
+            trdist._isatty = True
+
+    def pytest_report_header(self, config: pytest.Config) -> list[str]:
+        return []
+
+    def _print_header(self) -> None:
+        root = str(self.config.rootpath)
+        home = os.path.expanduser("~")
+        if root.startswith(home):
+            root = "~" + root[len(home) :]
+        bits = [f"python {platform.python_version()}", f"pytest {pytest.__version__}", root]
+        if self.config.inipath:
+            bits.append(self.config.inipath.name)
+        header = Text.assemble((" ✦ glow ", "bold black on magenta"), "  ", (" · ".join(bits), "dim"))
+        self._print(header)
+        plugins = sorted(
+            {dist.project_name for _, dist in self.config.pluginmanager.list_plugin_distinfo()} - {"pytest-glow"}
+        )
+        if plugins:
+            self._print(Text(f"   plugins: {', '.join(plugins)}", style="dim"))
+        lines = self.config.hook.pytest_report_header(config=self.config, start_path=self.startpath)
+        for group in reversed(lines):
+            for line in [group] if isinstance(group, str) else group:
+                self._print(Text(f"   {line}", style="dim"))
+
+    def pytest_collection(self) -> None:
+        pass
+
+    def pytest_collectreport(self, report: pytest.CollectReport) -> None:
+        if report.failed:
+            self._add_stats("error", [report])
+            self._collect_errors.append(report)
+            self._print(
+                Text.assemble(
+                    ("  ✗ ", "bold red"),
+                    ("collection error ", "red"),
+                    render.nodeid_text(report.nodeid or "."),
+                    ("  " + render.crash_message(report), "dim red"),
+                )
+            )
+        elif report.skipped:
+            self._add_stats("skipped", [report])
+        self._numcollected += sum(1 for x in report.result if isinstance(x, pytest.Item))
+
+    def report_collect(self, final: bool = False) -> None:
+        pass
+
+    def pytest_collection_finish(self, session: pytest.Session) -> None:
+        self._plan([item.nodeid for item in session.items])
+        lines = self.config.hook.pytest_report_collectionfinish(
+            config=self.config, start_path=self.startpath, items=session.items
+        )
+        for group in reversed(lines):
+            for line in [group] if isinstance(group, str) else group:
+                self._print(Text(f"   {line}", style="dim"))
+
+    @pytest.hookimpl(optionalhook=True)
+    def pytest_xdist_node_collection_finished(self, node: Any, ids: list[str]) -> None:
+        with self._lock:
+            self._workers.add(str(getattr(getattr(node, "gateway", None), "id", node)))
+        self._plan(ids)
+
+    def _plan(self, nodeids: list[str]) -> None:
+        with self._lock:
+            if self._planned:
+                return
+            self._planned = True
+            per_file = Counter(render.file_of(n) for n in nodeids)
+            for path, n in per_file.items():
+                self._files[path] = FileState(path, n)
+            self._total = len(nodeids)
+            self._path_width = min(max((len(p) for p in per_file), default=10), 48)
+
+    def _announce_plan(self) -> None:
+        if self._announced:
+            return
+        self._announced = True
+        bits = [
+            Text.assemble((str(self._total), "bold"), (" tests" if self._total != 1 else " test", "dim")),
+            Text.assemble((str(len(self._files)), "bold"), (" files" if len(self._files) != 1 else " file", "dim")),
+        ]
+        deselected = len(self.stats.get("deselected", []))
+        if deselected:
+            bits.append(Text.assemble((str(deselected), "bold"), (" deselected", "dim")))
+        if self._workers:
+            bits.append(Text.assemble((str(len(self._workers)), "bold"), (" workers", "dim")))
+        self._print(Text("   ") + Text(" · ", style="dim").join(bits))
+        self._print()
+
+    # -- running tests -----------------------------------------------------------------
+
+    def pytest_runtestloop(self) -> None:
+        return None
+
+    def _file(self, nodeid: str) -> FileState:
+        path = render.file_of(nodeid)
+        fs = self._files.get(path)
+        if fs is None:
+            fs = self._files[path] = FileState(path, 0)
+        return fs
+
+    def pytest_runtest_logstart(self, nodeid: str, location: tuple) -> None:
+        now = time.monotonic()
+        with self._lock:
+            if self._t_run is None:
+                self._t_run = now
+            self._running[nodeid] = now
+            fs = self._file(nodeid)
+            if fs.started is None:
+                fs.started = now
+        self._announce_plan()
+
+    @pytest.hookimpl(wrapper=True)
+    def pytest_runtest_makereport(self, item: pytest.Item, call: pytest.CallInfo):
+        report = yield
+        if report.failed and call.excinfo is not None and self._tbstyle in ("auto", "long"):
+            with contextlib.suppress(Exception):
+                self._tracebacks[(report.nodeid, report.when)] = render.rich_traceback(call.excinfo, self.console.width)
+        return report
+
+    def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
+        self._tests_ran = True
+        category = self.config.hook.pytest_report_teststatus(report=report, config=self.config)[0]
+        self._add_stats(category, [report])
+        with self._lock:
+            ts = self._tests.setdefault(report.nodeid, TestState())
+            ts.duration += report.duration
+            if category and ts.outcome not in render.FAILING:
+                ts.outcome = category
+            if report.failed:
+                tb = self._tracebacks.pop((report.nodeid, report.when), None)
+                self._failures.append(Failure(report, tb))
+        if report.failed and self._verbose >= -1:
+            line = Text.assemble(("  ✗ ", "bold red"), render.nodeid_text(report.nodeid))
+            if report.when != "call":
+                line.append(f" ({report.when})", style="red")
+            line.append("  " + render.crash_message(report), style="dim red")
+            self._print(line)
+
+    def pytest_runtest_logfinish(self, nodeid: str, location: tuple) -> None:
+        with self._lock:
+            self._running.pop(nodeid, None)
+            ts = self._tests.setdefault(nodeid, TestState())
+            if ts.finished:
+                return
+            ts.finished = True
+            ts.outcome = ts.outcome or "passed"
+            self._counts[ts.outcome] += 1
+            self._done += 1
+            fs = self._file(nodeid)
+            fs.done += 1
+            fs.categories.append(ts.outcome)
+            fs.counts[ts.outcome] += 1
+            fs.duration += ts.duration
+            fs.total = max(fs.total, fs.done)
+            file_done = fs.done >= fs.total and not fs.flushed
+            if file_done:
+                fs.flushed = True
+        if self._verbose > 0:
+            self._print(
+                Text.assemble(
+                    "    ",
+                    (render.glyph(ts.outcome), render.style(ts.outcome)),
+                    " ",
+                    render.nodeid_text(nodeid),
+                    ("  " + render.fmt_dur(ts.duration), "dim"),
+                )
+            )
+        if file_done and self._verbose >= 0:
+            self._print(self._file_line(fs))
+
+    def _file_line(self, fs: FileState, now: float | None = None) -> Text:
+        live = now is not None
+        failing = any(fs.counts[c] for c in render.FAILING)
+        if live:
+            cat = None
+        elif failing:
+            cat = "failed"
+        elif fs.done < fs.total:
+            cat = None
+        elif fs.counts and set(fs.counts) <= {"skipped"}:
+            cat = "skipped"
+        else:
+            cat = "passed"
+        if live:
+            icon = fs.spinner.render(now)
+            icon.stylize("red" if failing else "cyan")
+        elif cat is None:
+            icon = Text("◌", style="dim")
+        else:
+            icon = Text(render.glyph(cat), style=f"bold {render.style(cat)}")
+        width = max(10, min(40, self.console.width - self._path_width - 34))
+        count = f"{fs.done}/{fs.total}" if live or fs.done < fs.total else str(fs.total)
+        clock = render.fmt_clock(now - fs.started) if live else render.fmt_dur(fs.duration)
+        line = Text.assemble(
+            "  ",
+            icon,
+            " ",
+            render.path_text(fs.path, self._path_width),
+            "  ",
+            render.strip(fs.categories, fs.total, width),
+            (f" {count:>7}", "dim"),
+            (f" {clock:>7}", "dim"),
+        )
+        bad = render.counts_text(Counter({c: n for c, n in fs.counts.items() if c != "passed"}))
+        if bad:
+            line.append("  ")
+            line.append_text(bad)
+        return line
+
+    # -- the live view ------------------------------------------------------------------
+
+    def _render_live(self):
+        now = time.monotonic()
+        with self._lock:
+            if not self._planned or self._t_run is None:
+                n = self._total if self._planned else self._numcollected
+                text = Text.assemble(("collecting", "bold"), ("… ", "dim"), (str(n), "bold"), (" tests", "dim"))
+                if self._status:
+                    text.append(f"   {self._status}", style="dim")
+                self._collect_spinner.update(text=text)
+                return Group(Text(""), self._collect_spinner)
+
+            failing = sum(self._counts[c] for c in render.FAILING) + len(self._collect_errors)
+            parts: list = []
+
+            active = sorted(
+                (fs for fs in self._files.values() if fs.started is not None and not fs.flushed),
+                key=lambda fs: fs.started,
+            )
+            for fs in active[:MAX_ACTIVE_FILES]:
+                parts.append(self._file_line(fs, now))
+            if active and len(active) > MAX_ACTIVE_FILES:
+                parts.append(Text(f"  … {len(active) - MAX_ACTIVE_FILES} more files running", style="dim"))
+
+            slow = sorted((t0, nodeid) for nodeid, t0 in self._running.items() if now - t0 >= SLOW_RUNNING)
+            show_file = len(active) > 1
+            for t0, nodeid in slow[:MAX_RUNNING_TESTS]:
+                elapsed = now - t0
+                st = "bold red" if elapsed >= 5 else "yellow" if elapsed >= 1 else "dim"
+                name = render.nodeid_text(nodeid) if show_file else Text(render.test_name(nodeid))
+                parts.append(Text.assemble("     ", ("↳ ", "dim"), name, ("  ⏱ " + render.fmt_clock(elapsed), st)))
+
+            total = max(self._total, self._done, 1)
+            elapsed = now - self._t_run
+            eta = elapsed / self._done * (total - self._done) if self._done else None
+            overall = Table.grid(padding=(0, 1), expand=True)
+            overall.add_column(width=1)
+            overall.add_column(ratio=1)
+            for _ in range(4):
+                overall.add_column(justify="right", no_wrap=True)
+            bar_style = "red" if failing else "green"
+            overall.add_row(
+                "",
+                ProgressBar(total=total, completed=self._done, complete_style=bar_style, finished_style=bar_style),
+                Text.assemble(
+                    (str(self._done), "bold"), (f"/{total}", "dim"), (f"  {self._done * 100 // total}%", "bold")
+                ),
+                render.counts_text(self._counts),
+                Text("⏱ " + render.fmt_clock(elapsed), style="dim"),
+                Text("eta " + (render.fmt_clock(eta) if eta is not None else "…"), style="dim"),
+            )
+            parts += [Text(""), overall]
+            if self._status and self._verbose > 0:
+                parts.append(Text(self._status, style="dim"))
+            return Group(*parts)
+
+    # -- debugging --------------------------------------------------------------------
+
+    def pytest_enter_pdb(self, config: pytest.Config, pdb: Any) -> None:
+        self._stop_live()
+
+    def pytest_leave_pdb(self, config: pytest.Config, pdb: Any) -> None:
+        self._start_live()
+
+    def pytest_internalerror(self, excrepr: Any) -> bool:
+        self._stop_live()
+        return super().pytest_internalerror(excrepr)
+
+    def pytest_unconfigure(self) -> None:
+        self._stop_live()
+        super().pytest_unconfigure()
+        self.console.file.flush()
+
+    # -- the final report -------------------------------------------------------------
+
+    def pytest_terminal_summary(self) -> None:
+        # Our own summary is printed around the hook; other plugins still get their turn.
+        pass
+
+    @pytest.hookimpl(wrapper=True)
+    def pytest_sessionfinish(self, session: pytest.Session, exitstatus: int):
+        # A wrapper, like the stock reporter: report after every other plugin has finished.
+        result = yield
+        self._report(session, exitstatus)
+        return result
+
+    def _report(self, session: pytest.Session, exitstatus: int) -> None:
+        self._stop_live()
+        self._announce_plan()
+        for fs in self._files.values():
+            if fs.done and not fs.flushed and self._verbose >= 0:
+                fs.flushed = True
+                self._print(self._file_line(fs))
+
+        show = not getattr(self, "no_summary", False)
+        if show:
+            self._print_collect_errors()
+            self._print_failures()
+            self._print_warnings()
+        self._coverage = cov.collect(self.config)
+        if self._coverage is None:
+            for content in self._suppressed:
+                self._print(Text(content.strip(), style="bold red"))
+        if exitstatus in SUMMARY_EXIT_CODES:
+            self.config.hook.pytest_terminal_summary(terminalreporter=self, exitstatus=exitstatus, config=self.config)
+        self._print_coverage()
+        get_max = getattr(self, "_get_max_warnings", None)
+        max_warnings = get_max() if get_max else None
+        if max_warnings is not None and session.exitstatus == pytest.ExitCode.OK:
+            n = len(self.stats.get("warnings", []))
+            if n > max_warnings:
+                session.exitstatus = pytest.ExitCode.MAX_WARNINGS_ERROR
+                self._print(Text(f"Tests pass, but maximum allowed warnings exceeded: {n} > {max_warnings}", "red"))
+        if show:
+            self._print_slowest()
+            self._print_insights()
+        if session.shouldfail:
+            self._print(Text(f"  ! {session.shouldfail}", style="bold red"))
+        elif session.shouldstop:
+            self._print(Text(f"  ! {session.shouldstop}", style="bold red"))
+        if exitstatus == pytest.ExitCode.INTERRUPTED and getattr(self, "_keyboardinterrupt_memo", None) is not None:
+            crash = self._keyboardinterrupt_memo.reprcrash
+            where = f" at {crash.path}:{crash.lineno}" if crash is not None else ""
+            self._print(Text(f"  ◌ interrupted{where}", style="bold yellow"))
+            self._keyboardinterrupt_memo = None
+        self._print_verdict(session, exitstatus)
+        self._save_history(exitstatus)
+
+    def _rule(self, title: str, style: str) -> None:
+        self.console.print()
+        self.console.rule(Text(f" {title} ", style=f"bold {style}"), style=style, align="left")
+
+    def _print_collect_errors(self) -> None:
+        if not self._collect_errors:
+            return
+        self._rule("collection errors", "red")
+        for report in self._collect_errors:
+            self.console.print(Text.assemble(("✗ ", "bold red"), render.nodeid_text(report.nodeid or ".")))
+            self.console.print(render.longrepr_text(str(report.longreprtext)))
+
+    def _print_failures(self) -> None:
+        if not self._failures or self._tbstyle == "no":
+            return
+        self._rule(f"failures ({len(self._failures)})", "red")
+        for i, failure in enumerate(self._failures):
+            report = failure.report
+            title = Text.assemble(("✗ ", "bold red"), render.nodeid_text(report.nodeid))
+            if report.when != "call":
+                title.append(f"  error in {report.when}", style="red")
+            if i:
+                self.console.print()
+            self.console.print(title)
+            if failure.traceback is not None:
+                render.shorten_paths(failure.traceback, str(self.config.invocation_params.dir))
+                self.console.print(failure.traceback)
+            else:
+                self.console.print(Panel(render.longrepr_text(str(report.longreprtext)), border_style="red"))
+            for name, content in report.sections:
+                if not content.strip():
+                    continue
+                lines = content.rstrip().splitlines()
+                if len(lines) > 30:
+                    lines = [f"… {len(lines) - 30} more lines", *lines[-30:]]
+                self.console.print(
+                    Panel(
+                        Text("\n".join(lines)),
+                        title=Text(name.lower(), style="dim"),
+                        title_align="left",
+                        border_style="grey37",
+                        padding=(0, 1),
+                    )
+                )
+
+    def _print_warnings(self) -> None:
+        warnings = self.stats.get("warnings", [])
+        if not warnings:
+            return
+        self._rule(f"warnings ({len(warnings)})", "yellow")
+        grouped: dict[str, list] = {}
+        for w in warnings:
+            grouped.setdefault(w.message.strip(), []).append(w)
+        for message, items in list(grouped.items())[:8]:
+            head = _WARNING_LOCATION.sub("", message.splitlines()[0]) if message else ""
+            category, _, text = head.partition(": ")
+            where = items[0].nodeid or (
+                f"{items[0].fslocation[0]}:{items[0].fslocation[1]}" if items[0].fslocation else ""
+            )
+            line = Text.assemble(("  ⚠ ", "yellow"), (f"{category}: ", "bold yellow"), (text, "yellow"))
+            if len(items) > 1:
+                line.append(f"  ×{len(items)}", style="bold yellow")
+            self._print(line)
+            if where:
+                self._print(Text(f"    {where}", style="dim"))
+        if len(grouped) > 8:
+            self._print(Text(f"  … {len(grouped) - 8} more kinds of warnings", style="dim"))
+
+    def _print_coverage(self) -> None:
+        result = self._coverage
+        if result is None:
+            return
+        if result.show_table and result.files:
+            self._rule("coverage", "cyan")
+            files = [f for f in result.files if not (result.skip_covered and f.percent >= 100)]
+            hidden = 0
+            if len(files) > 25:
+                partial = sorted((f for f in files if f.percent < 100), key=lambda f: f.percent)[:25]
+                hidden, files = len(files) - len(partial), partial
+            width = min(max([len(f.path) for f in files] + [5]), 48)
+            for f in files:
+                line = Text.assemble(
+                    "  ",
+                    render.path_text(f.path, width),
+                    "  ",
+                    cov.bar(f.percent, 20),
+                    (f" {cov.fmt_percent(f.percent, 0):>4}", f"bold {cov.color(f.percent)}"),
+                )
+                before = self._history.coverage.get(f.path)
+                if before is not None and abs(f.percent - before) >= 0.5:
+                    up = f.percent > before
+                    line.append(
+                        f"  {'▲' if up else '▼'} {f.percent - before:+.0f}%", style="green" if up else "bold red"
+                    )
+                if f.missing:
+                    line.append(f"  {len(f.missing)} missing", style="dim")
+                    if result.show_missing:
+                        line.append(f"  {cov.ranges(f.missing)}", style="cyan")
+                self._print(line)
+            if hidden:
+                self._print(Text(f"  … {hidden} fully covered files not shown", style="dim"))
+            total = Text.assemble(
+                "  ",
+                ("total".ljust(width), "bold"),
+                "  ",
+                cov.bar(result.total, 20, result.fail_under),
+                (
+                    f" {cov.fmt_percent(result.total, result.precision):>4}",
+                    f"bold {cov.color(result.total, result.fail_under)}",
+                ),
+            )
+            self.console.print()
+            self._print(total)
+        for note in result.notes:
+            self._print(Text(f"  {note}", style="dim"))
+
+    def _coverage_line(self) -> Text | None:
+        result = self._coverage
+        if result is None:
+            return None
+        st = cov.color(result.total, result.fail_under)
+        line = Text.assemble(
+            ("☂ ", st), (cov.fmt_percent(result.total, result.precision), f"bold {st}"), (" covered", "dim")
+        )
+        before = self._history.last_coverage()
+        if before is not None:
+            delta = result.total - before
+            if abs(delta) < 0.05:
+                line.append("  · unchanged", style="dim")
+            else:
+                line.append(
+                    f"  · {'▲' if delta > 0 else '▼'} {delta:+.1f}% vs last run",
+                    style="green" if delta > 0 else "yellow",
+                )
+        if result.fail_under is not None:
+            if result.failed:
+                line.append(f"  · below the required {result.fail_under:g}%", style="bold red")
+            else:
+                line.append(f"  · meets the required {result.fail_under:g}%", style="dim")
+        return line
+
+    def _print_slowest(self) -> None:
+        finished = [(ts.duration, nodeid) for nodeid, ts in self._tests.items() if ts.finished]
+        slowest = [item for item in sorted(finished, reverse=True)[:5] if item[0] >= 0.1]
+        if not slowest or slowest[0][0] < 0.2:
+            return
+        self.console.print()
+        self.console.print(Text("  slowest", style="bold dim"))
+        table = Table.grid(padding=(0, 2))
+        table.add_column(justify="right", no_wrap=True)
+        table.add_column(no_wrap=True, overflow="ellipsis")
+        table.add_column(no_wrap=True)
+        for dur, nodeid in slowest:
+            st = "bold red" if dur >= 5 else "yellow" if dur >= 1 else "default"
+            compare = Text()
+            median = self._history.median_duration(nodeid)
+            if median and dur >= 0.1 and abs(dur - median) / median >= 0.25:
+                pct = (dur - median) / median * 100
+                compare = Text(f"{'▲' if pct > 0 else '▼'} {pct:+.0f}% vs usual", style="red" if pct > 0 else "green")
+            table.add_row(Text("  " + render.fmt_dur(dur), style=st), render.nodeid_text(nodeid), compare)
+        self.console.print(table)
+
+    def _print_insights(self) -> None:
+        if not self._history.enabled:
+            return
+        fixed, broken, flaky = [], [], []
+        for nodeid, ts in self._tests.items():
+            if not ts.finished:
+                continue
+            last = self._history.last_outcome(nodeid)
+            now_failing = ts.outcome in render.FAILING
+            if last in ("F", "E") and ts.outcome == "passed":
+                fixed.append(nodeid)
+            elif last == "P" and now_failing:
+                broken.append(nodeid)
+            trail = self._history.outcomes(nodeid) + {"passed": "P", "failed": "F", "error": "E"}.get(ts.outcome, "")
+            if is_flaky(trail):
+                flaky.append((nodeid, trail))
+        if not (fixed or broken or flaky):
+            return
+        self.console.print()
+        for icon, st, title, items in (("✨", "green", "fixed", fixed), ("💥", "red", "newly failing", broken)):
+            for nodeid in items[:5]:
+                self._print(Text.assemble(f"  {icon} ", (f"{title}  ", f"bold {st}"), render.nodeid_text(nodeid)))
+            if len(items) > 5:
+                self._print(Text(f"     … and {len(items) - 5} more {title}", style="dim"))
+        for nodeid, trail in flaky[:5]:
+            self._print(
+                Text.assemble(
+                    "  〰 ",
+                    ("flaky  ", "bold yellow"),
+                    render.nodeid_text(nodeid),
+                    "  ",
+                    render.outcome_trail(trail[-10:]),
+                )
+            )
+
+    def _print_verdict(self, session: pytest.Session, exitstatus: int) -> None:
+        failing = sum(self._counts[c] for c in render.FAILING) + len(self._collect_errors)
+        if self._coverage is not None and self._coverage.failed:
+            failing += 1
+        if exitstatus == pytest.ExitCode.INTERRUPTED:
+            icon, word, st = "◌", "interrupted", "yellow"
+        elif failing or exitstatus not in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED):
+            icon, word, st = "✗", "failed", "red"
+        elif exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED or not self._done:
+            icon, word, st = "∅", "no tests ran", "grey50"
+        else:
+            icon, word, st = "✓", "all green", "green"
+
+        duration = time.monotonic() - self._t_start
+        counts = Counter(self._counts)
+        extra = {
+            "collection error": (len(self._collect_errors), "red"),
+            "warning": (len(self.stats.get("warnings", [])), "yellow"),
+            "deselected": (len(self.stats.get("deselected", [])), "grey50"),
+        }
+        line1 = Text.assemble(
+            (f" {icon} {word.upper()} ", f"bold reverse {st}"),
+            "  ",
+            render.counts_text(counts, compact=False, extra=extra),
+        )
+        inner = max(10, self.console.width - 4)
+        bar = render.proportion_bar(counts, inner) if counts else Text("━" * inner, style="grey30")
+
+        line3 = Text.assemble(("⏱ ", "dim"), (render.fmt_dur(duration), "bold"))
+        prev = self._history.last_comparable_run(self._done) if self._done else None
+        if prev and exitstatus != pytest.ExitCode.INTERRUPTED:
+            delta = duration - prev.get("d", duration)
+            if abs(delta) < 0.05 or abs(delta) / max(prev.get("d", 1), 1e-9) < 0.05:
+                line3.append("  · same pace as last run", style="dim")
+            elif delta < 0:
+                line3.append(f"  · ▼ {render.fmt_dur(-delta)} faster than last run", style="green")
+            else:
+                line3.append(f"  · ▲ {render.fmt_dur(delta)} slower than last run", style="yellow")
+        if self._workers:
+            line3.append(f"  · {len(self._workers)} workers", style="dim")
+
+        lines = [line1, bar, line3]
+        coverage_line = self._coverage_line()
+        if coverage_line is not None:
+            lines.append(coverage_line)
+        if self._history.enabled and self._done and exitstatus != pytest.ExitCode.INTERRUPTED:
+            ok = word == "all green"
+            runs = [*self._history.runs[-23:], {"d": duration, "ok": ok}]
+            line4 = Text.assemble(("runs ", "dim"), render.sparkline(runs))
+            streak = self._history.green_streak()
+            if ok and streak >= 1:
+                line4.append(f"  🔥 {streak + 1} green runs in a row", style="bold green")
+            elif ok and self._history.runs:
+                line4.append("  ✨ back to green", style="bold green")
+            elif not ok and streak >= 3:
+                line4.append(f"  a streak of {streak} green runs just ended", style="dim")
+            elif not self._history.runs:
+                line4.append("  first run here — history starts now", style="dim")
+            lines.append(line4)
+
+        self.console.print()
+        if self._failures and not getattr(self, "no_summary", False):
+            for failure in self._failures[:15]:
+                report = failure.report
+                where = "" if report.when == "call" else f" ({report.when})"
+                self._print(
+                    Text.assemble(
+                        ("  ✗ ", "bold red"),
+                        render.nodeid_text(report.nodeid),
+                        (where, "red"),
+                        ("  " + render.crash_message(report), "dim"),
+                    )
+                )
+            if len(self._failures) > 15:
+                self._print(Text(f"    … and {len(self._failures) - 15} more", style="dim"))
+        self.console.print(
+            Panel(
+                Group(*lines),
+                border_style=st,
+                padding=(0, 1),
+                title=Text(f" pytest-glow {__version__} ", style="dim"),
+                title_align="right",
+            )
+        )
+
+    def _save_history(self, exitstatus: int) -> None:
+        if not self._history.enabled or not self._done or exitstatus == pytest.ExitCode.INTERRUPTED:
+            return
+        results = {nodeid: (ts.outcome or "passed", ts.duration) for nodeid, ts in self._tests.items() if ts.finished}
+        failing = sum(self._counts[c] for c in render.FAILING) + len(self._collect_errors)
+        if self._coverage is not None and self._coverage.failed:
+            failing += 1
+        measured = None
+        if self._coverage is not None:
+            measured = (self._coverage.total, {f.path: f.percent for f in self._coverage.files})
+        self._history.record(
+            results, time.monotonic() - self._t_start, ok=not failing, failed=failing, coverage=measured
+        )
+        self._history.save()
