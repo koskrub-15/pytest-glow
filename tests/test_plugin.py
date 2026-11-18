@@ -312,3 +312,30 @@ def test_no_blame_outside_git(pytester):
     pytester.makepyfile("def test_bad():\n    assert 1 == 2\n")
     _, out = run(pytester, "--glow")
     assert "last touched" not in out and "not committed" not in out
+
+
+def test_assertion_diffs(pytester):
+    pytester.makepyfile("""
+        import pytest
+
+        def test_payload():
+            assert {"name": "ada", "role": "user"} == {"name": "ada", "role": "admin"}
+
+        def test_caught_compare_is_not_reused():
+            with pytest.raises(AssertionError):
+                assert 1 == 2
+            assert not "a non-comparison"
+    """)
+    _, out = run(pytester, "--glow")
+    assert "test_payload  role: 'user' → 'admin'" in out
+    assert "~ 'role': 'user' → 'admin'" in out
+    assert "Omitting 1 identical items" not in out
+    assert "1 ≠ 2" not in out
+
+
+def test_short_tracebacks_keep_pytest_text(pytester):
+    pytester.makepyfile(test_t="def test_payload():\n    assert {'role': 'user'} == {'role': 'admin'}\n")
+    _, out = run(pytester, "--glow", "--tb=short")
+    assert "Differing items" in out
+    assert "test_payload  role: 'user' → 'admin'" in out
+    assert "+ right" not in out
