@@ -12,6 +12,8 @@ from typing import Any
 
 from rich.text import Text
 
+from . import render
+
 
 @dataclass
 class FileCoverage:
@@ -94,7 +96,12 @@ def bar(percent: float, width: int, fail_under: float | None = None) -> Text:
     filled = round(percent / 100 * width)
     if percent < 100:
         filled = min(filled, width - 1)  # an almost-full bar must still look unfinished
-    return Text.assemble(("━" * filled, color(percent, fail_under)), ("━" * (width - filled), "grey30"))
+    stops = render.GRADIENTS[color(percent, fail_under)]
+    text = Text()
+    for i in range(filled):
+        text.append("━", style=render.gradient_at(stops, i / max(width - 1, 1)))
+    text.append("━" * (width - filled), style=render._TRACK)
+    return text
 
 
 def ranges(lines: list[int]) -> str:

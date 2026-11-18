@@ -17,7 +17,6 @@ from _pytest.terminal import TerminalReporter
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
-from rich.progress_bar import ProgressBar
 from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
@@ -36,6 +35,7 @@ SUMMARY_EXIT_CODES = (
 MAX_ACTIVE_FILES = 6
 MAX_RUNNING_TESTS = 5
 SLOW_RUNNING = 0.5  # seconds before a running test shows up in the live view
+REVEAL = 0.45  # seconds the final verdict takes to sweep in on a terminal
 
 
 @dataclass
@@ -47,6 +47,7 @@ class FileState:
     counts: Counter = field(default_factory=Counter)
     duration: float = 0.0
     started: float | None = None
+    finished_at: list = field(default_factory=list)
     flushed: bool = False
     spinner: Spinner = field(default_factory=lambda: Spinner("dots", style="cyan"))
 
@@ -220,7 +221,9 @@ class GlowReporter(TerminalReporter):
         bits = [f"python {platform.python_version()}", f"pytest {pytest.__version__}", root]
         if self.config.inipath:
             bits.append(self.config.inipath.name)
-        header = Text.assemble((" ✦ glow ", "bold black on magenta"), "  ", (" · ".join(bits), "dim"))
+        header = Text.assemble(
+            render.gradient_text(" ✦ glow ", render.GRADIENTS["glow"], background=True), "  ", (" · ".join(bits), "dim")
+        )
         self._print(header)
         plugins = sorted(
             {dist.project_name for _, dist in self.config.pluginmanager.list_plugin_distinfo()} - {"pytest-glow"}
@@ -347,6 +350,7 @@ class GlowReporter(TerminalReporter):
             self._print(line)
 
     def pytest_runtest_logfinish(self, nodeid: str, location: tuple) -> None:
+        now = time.monotonic()
         with self._lock:
             self._running.pop(nodeid, None)
             ts = self._tests.setdefault(nodeid, TestState())
@@ -359,6 +363,7 @@ class GlowReporter(TerminalReporter):
             fs = self._file(nodeid)
             fs.done += 1
             fs.categories.append(ts.outcome)
+            fs.finished_at.append(now)
             fs.counts[ts.outcome] += 1
             fs.duration += ts.duration
             fs.total = max(fs.total, fs.done)
@@ -407,7 +412,7 @@ class GlowReporter(TerminalReporter):
             " ",
             render.path_text(fs.path, self._path_width),
             "  ",
-            render.strip(fs.categories, fs.total, width),
+            render.strip(fs.categories, fs.total, width, [now - t for t in fs.finished_at] if live else None),
             (f" {count:>7}", "dim"),
             (f" {clock:>7}", "dim"),
         )
@@ -458,10 +463,9 @@ class GlowReporter(TerminalReporter):
             overall.add_column(ratio=1)
             for _ in range(4):
                 overall.add_column(justify="right", no_wrap=True)
-            bar_style = "red" if failing else "green"
             overall.add_row(
                 "",
-                ProgressBar(total=total, completed=self._done, complete_style=bar_style, finished_style=bar_style),
+                render.GlowBar(self._done, total, render.GRADIENTS["red" if failing else "green"], now),
                 Text.assemble(
                     (str(self._done), "bold"), (f"/{total}", "dim"), (f"  {self._done * 100 // total}%", "bold")
                 ),
@@ -548,7 +552,7 @@ class GlowReporter(TerminalReporter):
 
     def _rule(self, title: str, style: str) -> None:
         self.console.print()
-        self.console.rule(Text(f" {title} ", style=f"bold {style}"), style=style, align="left")
+        self._print(render.fade_rule(title, render.GRADIENTS.get(style, (style,)), self.console.width))
 
     def _print_collect_errors(self) -> None:
         if not self._collect_errors:
@@ -696,8 +700,10 @@ class GlowReporter(TerminalReporter):
         self.console.print(Text("  slowest", style="bold dim"))
         table = Table.grid(padding=(0, 2))
         table.add_column(justify="right", no_wrap=True)
+        table.add_column(no_wrap=True)
         table.add_column(no_wrap=True, overflow="ellipsis")
         table.add_column(no_wrap=True)
+        top = slowest[0][0]
         for dur, nodeid in slowest:
             st = "bold red" if dur >= 5 else "yellow" if dur >= 1 else "default"
             compare = Text()
@@ -705,7 +711,13 @@ class GlowReporter(TerminalReporter):
             if median and dur >= 0.1 and abs(dur - median) / median >= 0.25:
                 pct = (dur - median) / median * 100
                 compare = Text(f"{'▲' if pct > 0 else '▼'} {pct:+.0f}% vs usual", style="red" if pct > 0 else "green")
-            table.add_row(Text("  " + render.fmt_dur(dur), style=st), render.nodeid_text(nodeid), compare)
+            stops = render.GRADIENTS["red" if dur >= 5 else "yellow" if dur >= 1 else "cyan"]
+            table.add_row(
+                Text("  " + render.fmt_dur(dur), style=st),
+                render.glow_bar(dur, top, 12, stops),
+                render.nodeid_text(nodeid),
+                compare,
+            )
         self.console.print(table)
 
     def _print_insights(self) -> None:
@@ -763,8 +775,9 @@ class GlowReporter(TerminalReporter):
             "warning": (len(self.stats.get("warnings", [])), "yellow"),
             "deselected": (len(self.stats.get("deselected", [])), "grey50"),
         }
+        stops = render.GRADIENTS[st]
         line1 = Text.assemble(
-            (f" {icon} {word.upper()} ", f"bold reverse {st}"),
+            render.gradient_text(f" {icon} {word.upper()} ", stops, background=True),
             "  ",
             render.counts_text(counts, compact=False, extra=extra),
         )
@@ -784,7 +797,7 @@ class GlowReporter(TerminalReporter):
         if self._workers:
             line3.append(f"  · {len(self._workers)} workers", style="dim")
 
-        lines = [line1, bar, line3]
+        lines = [line1, line3]
         coverage_line = self._coverage_line()
         if coverage_line is not None:
             lines.append(coverage_line)
@@ -818,15 +831,28 @@ class GlowReporter(TerminalReporter):
                 )
             if len(self._failures) > 15:
                 self._print(Text(f"    … and {len(self._failures) - 15} more", style="dim"))
-        self.console.print(
-            Panel(
-                Group(*lines),
-                border_style=st,
-                padding=(0, 1),
-                title=Text(f" pytest-glow {__version__} ", style="dim"),
-                title_align="right",
-            )
-        )
+        title = Text(f" pytest-glow {__version__} ", style="dim")
+
+        def panel(reveal: float = 1.0, now: float | None = None) -> render.GlowPanel:
+            shown = round(len(bar) * reveal)
+            line2 = bar[:shown] + Text("━" * (len(bar) - shown), style=render._TRACK)
+            if now is not None and shown:
+                # the same sweeping highlight as the live bar, riding the bar while it fills
+                for i in range(max(shown - 8, 0), shown):
+                    glow = 1 - (shown - 1 - i) / 8
+                    base = line2.get_style_at_offset(self.console, i).color
+                    color = base.get_truecolor().hex if base is not None else "#ffffff"
+                    line2.stylize(f"bold {render.blend(color, render._WHITE, glow * 0.7)}", i, i + 1)
+            return render.GlowPanel(Group(lines[0], line2, *lines[1:]), stops, title)
+
+        if self._live_enabled and not os.environ.get("CI"):
+            with Live(panel(0.0), console=self.console, transient=True, refresh_per_second=60) as live:
+                t0 = time.monotonic()
+                while (elapsed := time.monotonic() - t0) < REVEAL:
+                    progress = 1 - (1 - elapsed / REVEAL) ** 3  # ease out
+                    live.update(panel(progress, elapsed))
+                    time.sleep(1 / 60)
+        self.console.print(panel())
 
     def _save_history(self, exitstatus: int) -> None:
         if not self._history.enabled or not self._done or exitstatus == pytest.ExitCode.INTERRUPTED:

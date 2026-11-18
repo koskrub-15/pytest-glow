@@ -33,19 +33,36 @@ def test_is_flaky(outcomes, flaky):
 def test_strip_buckets_keep_the_worst_outcome():
     strip = render.strip(["passed"] * 9 + ["failed"], total=10, width=5)
     assert strip.plain == "━" * 5
-    assert [span.style for span in strip.spans][-1] == "red"
+    assert [span.style for span in strip.spans][-1] == render.HEX["failed"]
 
 
 def test_strip_pads_unfinished_tests():
     strip = render.strip(["passed"], total=4, width=10)
     assert len(strip.plain) == 10
-    assert [span.style for span in strip.spans] == ["green", "grey30", "grey30", "grey30"]
+    assert [span.style for span in strip.spans] == [render.HEX["passed"]] + [render._TRACK] * 3
 
 
 def test_proportion_bar_fills_the_width_and_keeps_rare_outcomes_visible():
     bar = render.proportion_bar(Counter(passed=998, failed=1, skipped=1), width=50)
     assert len(bar.plain) == 50
-    assert {span.style for span in bar.spans} == {"green", "red", "yellow"}
+    assert {span.style for span in bar.spans} == {render.HEX[c] for c in ("passed", "failed", "skipped")}
+
+
+def test_strip_flashes_fresh_tests():
+    strip = render.strip(["passed", "passed"], total=2, width=2, ages=[10.0, 0.0])
+    assert [span.style for span in strip.spans] == [render.HEX["passed"], "bold #ffffff"]
+
+
+def test_glow_bar_fills_proportionally():
+    bar = render.glow_bar(1, 2, 10, render.GRADIENTS["green"])
+    assert len(bar.plain) == 10
+    assert bar.spans[-1].style == render._TRACK
+    assert sum(1 for span in bar.spans if span.style != render._TRACK) == 5
+
+
+def test_counts_are_not_dimmed_by_the_separator():
+    text = render.counts_text(Counter(passed=2, failed=1), compact=False)
+    assert text.style == ""
 
 
 @pytest.mark.parametrize(
