@@ -111,3 +111,69 @@ def test_history_survives_a_corrupt_cache():
     cache = FakeCache({"glow/history": "garbage"})
     assert History(cache).runs == []
     assert not History(None).enabled
+
+
+def facts(**kw):
+    from pytest_glow.achievements import RunFacts
+
+    base = {"ok": True, "hour": 14, "counts": Counter(passed=3), "done": 3}
+    return RunFacts(**{**base, **kw})
+
+
+@pytest.mark.parametrize(
+    ("kw", "key"),
+    [
+        ({"ok": False, "prior_runs": [{"ok": True}] * 3}, "first_blood"),
+        ({"prior_runs": [{"ok": True}] + [{"ok": False}] * 5}, "phoenix"),
+        ({"hour": 2}, "night_owl"),
+        ({"coverage_files": [(3, 100.0)]}, "minimalist"),
+        ({"coverage_total": 89.96, "fail_under": 90.0, "precision": 0}, "sniper"),
+        ({"new_pb": True}, "speedrunner"),
+        ({"longest_fixed_streak": 5}, "surgeon"),
+        ({"done": 120, "counts": Counter(passed=120)}, "clean_sweep"),
+        ({"green_streak": 100}, "centurion"),
+    ],
+)
+def test_achievements(kw, key):
+    from pytest_glow.achievements import earned
+
+    assert key in {a.key for a in earned(facts(**kw))}
+
+
+def test_an_ordinary_afternoon_earns_nothing():
+    from pytest_glow.achievements import earned
+
+    run = facts(prior_runs=[{"ok": True}] * 5, coverage_files=[(0, 100.0), (40, 100.0)], green_streak=6)
+    assert earned(run) == []
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [(5, "just now"), (60, "1 minute ago"), (3 * 86400 + 5, "3 days ago"), (400 * 86400, "1 year ago")],
+)
+def test_ago(seconds, expected):
+    from pytest_glow.blame import ago
+
+    assert ago(seconds) == expected
+
+
+def test_spark_scales_between_min_and_max():
+    assert render.spark([1, 2, 3], render.GRADIENTS["cyan"]).plain == "▁▅█"
+    assert render.spark([2, 2], render.GRADIENTS["cyan"]).plain == "▅▅"
+
+
+def test_confetti_frames_keep_their_size():
+    confetti = render.Confetti(30, height=4, seed=1)
+    for t in (0.0, 0.3, 0.9):
+        assert [len(line) for line in confetti.frame(t).plain.split("\n")] == [30] * 4
+    assert confetti.frame(0.3).plain.strip()
+
+
+def test_personal_best_only_counts_green_runs_of_the_same_size():
+    history = History(None)
+    history.record({"a": ("passed", 0.1)}, 2.0, ok=True, failed=0)
+    history.record({"a": ("failed", 0.1)}, 1.0, ok=False, failed=1)
+    history.record({"a": ("passed", 0.1), "b": ("passed", 0.1)}, 0.5, ok=True, failed=0)
+    assert history.personal_best(1) == 2.0
+    assert history.personal_best(2) == 0.5
+    assert history.greens == 1

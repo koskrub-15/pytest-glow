@@ -22,7 +22,9 @@ from rich.table import Table
 from rich.text import Text
 
 from . import __version__, render
+from . import achievements as ach
 from . import coverage as cov
+from .blame import blame, describe
 from .history import History, is_flaky
 
 SUMMARY_EXIT_CODES = (
@@ -36,6 +38,9 @@ MAX_ACTIVE_FILES = 6
 MAX_RUNNING_TESTS = 5
 SLOW_RUNNING = 0.5  # seconds before a running test shows up in the live view
 REVEAL = 0.45  # seconds the final verdict takes to sweep in on a terminal
+CELEBRATE = 0.95  # seconds of confetti for a personal best or an achievement
+MAX_BLAMES = 10
+EASTER_EGGS = {69: "nice.", 67: "six seven 🤷"}
 
 
 @dataclass
@@ -118,6 +123,10 @@ class GlowReporter(TerminalReporter):
         self._collect_spinner = Spinner("dots", style="magenta")
         self._history = History(getattr(config, "cache", None))
         self._coverage: cov.CoverageResult | None = None
+        self._hour = time.localtime().tm_hour
+        self._duration = 0.0
+        self._new_pb: float | None = None  # the record this run just beat
+        self._unlocked: list[ach.Achievement] = []
 
     # -- output plumbing ---------------------------------------------------------------
     # Other plugins (xdist, coverage, ...) write through the terminal reporter. While the
@@ -535,9 +544,12 @@ class GlowReporter(TerminalReporter):
             if n > max_warnings:
                 session.exitstatus = pytest.ExitCode.MAX_WARNINGS_ERROR
                 self._print(Text(f"Tests pass, but maximum allowed warnings exceeded: {n} > {max_warnings}", "red"))
+        self._duration = time.monotonic() - self._t_start
+        self._celebrations(exitstatus)
         if show:
             self._print_slowest()
             self._print_insights()
+            self._print_achievements()
         if session.shouldfail:
             self._print(Text(f"  ! {session.shouldfail}", style="bold red"))
         elif session.shouldstop:
@@ -574,6 +586,10 @@ class GlowReporter(TerminalReporter):
             if i:
                 self.console.print()
             self.console.print(title)
+            if i < MAX_BLAMES:
+                who = self._blame(report)
+                if who is not None:
+                    self._print(Text.assemble(("  ↳ ", "dim"), (who, "dim italic")))
             if failure.traceback is not None:
                 render.shorten_paths(failure.traceback, str(self.config.invocation_params.dir))
                 self.console.print(failure.traceback)
@@ -594,6 +610,26 @@ class GlowReporter(TerminalReporter):
                         padding=(0, 1),
                     )
                 )
+
+    def _blame(self, report: pytest.TestReport) -> str | None:
+        """git blame for the deepest frame of the failure that lives in the project."""
+        root = str(self.config.rootpath)
+        here = str(self.config.invocation_params.dir)
+        longrepr = report.longrepr
+        chain = getattr(longrepr, "chain", None)
+        tb = chain[-1][0] if chain else getattr(longrepr, "reprtraceback", None)
+        for entry in reversed(getattr(tb, "reprentries", None) or []):
+            loc = getattr(entry, "reprfileloc", None)
+            if loc is None:
+                continue
+            path = os.path.normpath(os.path.join(here, str(loc.path)))
+            if not path.startswith(root + os.sep) or "site-packages" in path.split(os.sep):
+                continue
+            found = blame(path, loc.lineno)
+            if found is None:
+                return None
+            return f"line {loc.lineno} {describe(found)}"
+        return None
 
     def _print_warnings(self) -> None:
         warnings = self.stats.get("warnings", [])
@@ -703,7 +739,13 @@ class GlowReporter(TerminalReporter):
         table.add_column(no_wrap=True)
         table.add_column(no_wrap=True, overflow="ellipsis")
         table.add_column(no_wrap=True)
+        table.add_column(no_wrap=True)
         top = slowest[0][0]
+
+        def trend(nodeid: str, dur: float) -> Text:
+            past = self._history.durations(nodeid)[-11:]
+            return render.spark([*past, dur], render.GRADIENTS["cyan"]) if len(past) >= 2 else Text()
+
         for dur, nodeid in slowest:
             st = "bold red" if dur >= 5 else "yellow" if dur >= 1 else "default"
             compare = Text()
@@ -716,6 +758,7 @@ class GlowReporter(TerminalReporter):
                 Text("  " + render.fmt_dur(dur), style=st),
                 render.glow_bar(dur, top, 12, stops),
                 render.nodeid_text(nodeid),
+                trend(nodeid, dur),
                 compare,
             )
         self.console.print(table)
@@ -755,10 +798,67 @@ class GlowReporter(TerminalReporter):
                 )
             )
 
-    def _print_verdict(self, session: pytest.Session, exitstatus: int) -> None:
+    def _failing(self) -> int:
         failing = sum(self._counts[c] for c in render.FAILING) + len(self._collect_errors)
         if self._coverage is not None and self._coverage.failed:
             failing += 1
+        return failing
+
+    def _celebrations(self, exitstatus: int) -> None:
+        """Personal bests and achievements, settled before anything is printed about them."""
+        history = self._history
+        if not history.enabled or not self._done or exitstatus == pytest.ExitCode.INTERRUPTED:
+            return
+        ok = not self._failing() and exitstatus == pytest.ExitCode.OK
+        best = history.personal_best(self._done)
+        if ok and best is not None and self._duration < best:
+            self._new_pb = best
+        fixed_streaks = [
+            history.failing_streak(nodeid)
+            for nodeid, ts in self._tests.items()
+            if ts.finished and ts.outcome == "passed"
+        ]
+        result = self._coverage
+        facts = ach.RunFacts(
+            ok=ok,
+            hour=self._hour,
+            counts=Counter(self._counts),
+            done=self._done,
+            warnings=len(self.stats.get("warnings", [])),
+            prior_runs=history.runs,
+            green_streak=history.greens + 1 if ok else 0,
+            new_pb=self._new_pb is not None,
+            longest_fixed_streak=max(fixed_streaks, default=0),
+            coverage_files=[(f.statements, f.percent) for f in result.files] if result else [],
+            coverage_total=result.total if result else None,
+            fail_under=result.fail_under if result else None,
+            precision=result.precision if result else 0,
+        )
+        now = round(time.time())
+        for a in ach.earned(facts):
+            if a.key not in history.achievements:
+                history.achievements[a.key] = now
+                self._unlocked.append(a)
+
+    def _print_achievements(self) -> None:
+        if not self._unlocked:
+            return
+        self.console.print()
+        for a in self._unlocked:
+            self._print(
+                Text.assemble(
+                    "  🏅 ",
+                    render.gradient_text("achievement unlocked", render.GRADIENTS["glow"]),
+                    "  ",
+                    (a.title, "bold"),
+                    ("  " + a.blurb, "dim"),
+                )
+            )
+        got = len(self._history.achievements)
+        self._print(Text(f"     {got}/{len(ach.ALL)} unlocked in this project", style="dim"))
+
+    def _print_verdict(self, session: pytest.Session, exitstatus: int) -> None:
+        failing = self._failing()
         if exitstatus == pytest.ExitCode.INTERRUPTED:
             icon, word, st = "◌", "interrupted", "yellow"
         elif failing or exitstatus not in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED):
@@ -768,7 +868,7 @@ class GlowReporter(TerminalReporter):
         else:
             icon, word, st = "✓", "all green", "green"
 
-        duration = time.monotonic() - self._t_start
+        duration = self._duration
         counts = Counter(self._counts)
         extra = {
             "collection error": (len(self._collect_errors), "red"),
@@ -781,6 +881,9 @@ class GlowReporter(TerminalReporter):
             "  ",
             render.counts_text(counts, compact=False, extra=extra),
         )
+        egg = EASTER_EGGS.get(counts.get("passed", 0))
+        if egg:
+            line1.append(f"  {egg}", style="dim italic")
         inner = max(10, self.console.width - 4)
         bar = render.proportion_bar(counts, inner) if counts else Text("━" * inner, style="grey30")
 
@@ -796,6 +899,10 @@ class GlowReporter(TerminalReporter):
                 line3.append(f"  · ▲ {render.fmt_dur(delta)} slower than last run", style="yellow")
         if self._workers:
             line3.append(f"  · {len(self._workers)} workers", style="dim")
+        if self._new_pb is not None:
+            line3.append("  · ")
+            line3.append_text(render.gradient_text("🏆 new PB", ("#facc15", "#fb923c")))
+            line3.append(f" ({render.fmt_dur(self._new_pb)} → {render.fmt_dur(duration)})", style="dim")
 
         lines = [line1, line3]
         coverage_line = self._coverage_line()
@@ -846,11 +953,20 @@ class GlowReporter(TerminalReporter):
             return render.GlowPanel(Group(lines[0], line2, *lines[1:]), stops, title)
 
         if self._live_enabled and not os.environ.get("CI"):
-            with Live(panel(0.0), console=self.console, transient=True, refresh_per_second=60) as live:
+            confetti = None
+            if self._new_pb is not None or self._unlocked:
+                confetti = render.Confetti(self.console.width)
+            length = CELEBRATE if confetti else REVEAL
+
+            def frame(elapsed: float):
+                progress = 1 - (1 - min(elapsed / REVEAL, 1)) ** 3  # ease out
+                view = panel(progress, elapsed if progress < 1 else None)
+                return Group(confetti.frame(elapsed), view) if confetti else view
+
+            with Live(frame(0.0), console=self.console, transient=True, refresh_per_second=60) as live:
                 t0 = time.monotonic()
-                while (elapsed := time.monotonic() - t0) < REVEAL:
-                    progress = 1 - (1 - elapsed / REVEAL) ** 3  # ease out
-                    live.update(panel(progress, elapsed))
+                while (elapsed := time.monotonic() - t0) < length:
+                    live.update(frame(elapsed))
                     time.sleep(1 / 60)
         self.console.print(panel())
 
@@ -858,13 +974,9 @@ class GlowReporter(TerminalReporter):
         if not self._history.enabled or not self._done or exitstatus == pytest.ExitCode.INTERRUPTED:
             return
         results = {nodeid: (ts.outcome or "passed", ts.duration) for nodeid, ts in self._tests.items() if ts.finished}
-        failing = sum(self._counts[c] for c in render.FAILING) + len(self._collect_errors)
-        if self._coverage is not None and self._coverage.failed:
-            failing += 1
+        failing = self._failing()
         measured = None
         if self._coverage is not None:
             measured = (self._coverage.total, {f.path: f.percent for f in self._coverage.files})
-        self._history.record(
-            results, time.monotonic() - self._t_start, ok=not failing, failed=failing, coverage=measured
-        )
+        self._history.record(results, self._duration, ok=not failing, failed=failing, coverage=measured)
         self._history.save()

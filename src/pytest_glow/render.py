@@ -406,3 +406,65 @@ class GlowPanel:
             yield Segment(" │", color(width - 1, y))
             yield Segment.line()
         yield edge("╰", "╯", height - 1)
+
+
+def spark(values: list[float], stops: tuple[str, ...]) -> Text:
+    """A sparkline of plain values; the last (current) one is drawn bold."""
+    text = Text()
+    if not values:
+        return text
+    lo, hi = min(values), max(values)
+    for i, v in enumerate(values):
+        t = (v - lo) / (hi - lo) if hi > lo else 0.5
+        st = gradient_at(stops, t)
+        text.append(SPARKS[round(t * (len(SPARKS) - 1))], style=f"bold {st}" if i == len(values) - 1 else st)
+    return text
+
+
+CONFETTI = "✦✧•*·+°"
+
+
+class Confetti:
+    """A few bursts of particles thrown up from below, falling back under gravity."""
+
+    def __init__(self, width: int, height: int = 6, seed: int | None = None) -> None:
+        import random
+
+        rnd = random.Random(seed)
+        self.width, self.height = width, height
+        colors = [*GRADIENTS["glow"], *GRADIENTS["green"], "#facc15", "#fb923c"]
+        self.particles = []
+        for burst in range(4):
+            x0 = rnd.uniform(0.15, 0.85) * width
+            delay = burst * 0.12
+            for _ in range(18):
+                self.particles.append(
+                    (
+                        x0,
+                        delay,
+                        rnd.uniform(-28, 28),  # sideways speed, cells/s
+                        rnd.uniform(14, 24),  # upward speed, rows/s
+                        rnd.choice(CONFETTI),
+                        rnd.choice(colors),
+                    )
+                )
+
+    def frame(self, t: float) -> Text:
+        grid: dict[tuple[int, int], tuple[str, str]] = {}
+        for x0, delay, vx, vy, ch, color in self.particles:
+            age = t - delay
+            if age < 0:
+                continue
+            x = round(x0 + vx * age)
+            y = round(self.height - (vy * age - 30 * age * age))  # rows from the top
+            if 0 <= x < self.width and 0 <= y < self.height:
+                fade = min(max((age - 0.5) / 0.5, 0.0), 1.0)
+                grid[(y, x)] = (ch, blend(color, "#3b3b4a", fade))
+        text = Text()
+        for y in range(self.height):
+            for x in range(self.width):
+                ch, color = grid.get((y, x), (" ", ""))
+                text.append(ch, style=color)
+            if y < self.height - 1:
+                text.append("\n")
+        return text

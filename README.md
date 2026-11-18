@@ -23,6 +23,15 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 - flaky tests, with their recent pass/fail trail
 - "faster/slower than last run", tests that got slower than usual, a sparkline of recent runs
 
+**Pure showing off** (all of it remembered in `.pytest_cache` too)
+- personal bests: the fastest green run for a given number of tests, `🏆 new PB` when you beat it
+- achievements, each unlocked once per project: First Blood, Phoenix, Night Owl, Minimalist, Sniper,
+  Speedrunner, Surgeon, Clean Sweep, Centurion
+- a burst of confetti over the verdict when you set a record or unlock something (never in CI or pipes)
+- under each failure, who last touched the failing line and when, from `git blame`
+- a duration sparkline next to each of the slowest tests, so you see the ones getting slower
+- certain pass counts are acknowledged
+
 **Coverage**: with `pytest-cov` installed, its plain table is replaced by a bar per file, the missing line
 ranges, per-file gains and drops since the last run, and the total plus `--cov-fail-under` in the verdict.
 

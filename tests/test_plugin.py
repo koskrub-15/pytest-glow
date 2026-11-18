@@ -255,3 +255,60 @@ def test_traceback_paths_are_relative(pytester):
     _, out = run(pytester, "--glow")
     assert "test_traceback_paths_are_relative.py:2 in test_bad" in out
     assert str(pytester.path) not in out
+
+
+@pytest.mark.parametrize(("n", "egg"), [(69, "nice."), (67, "six seven"), (68, None)])
+def test_easter_eggs(pytester, n, egg):
+    pytester.makepyfile(f"import pytest\n\n@pytest.mark.parametrize('i', range({n}))\ndef test_n(i): pass\n")
+    _, out = run(pytester, "--glow")
+    assert f"{n} passed" in out
+    for text in ("nice.", "six seven"):
+        assert (text in out) == (text == egg)
+
+
+def test_personal_best(pytester, monkeypatch):
+    pytester.makepyfile("import os, time\n\ndef test_one(): time.sleep(float(os.environ.get('NAP', 0)))\n")
+    monkeypatch.setenv("NAP", "0.5")
+    _, first = run(pytester, "--glow")
+    assert "new PB" not in first
+    monkeypatch.setenv("NAP", "0")
+    _, second = run(pytester, "--glow")
+    assert "new PB" in second
+    assert "Speedrunner" in second
+
+
+def test_first_blood_is_unlocked_once(pytester):
+    pytester.makepyfile("def test_one(): pass\n")
+    run(pytester, "--glow")
+    pytester.makepyfile("def test_one(): assert 0\n")
+    _, out = run(pytester, "--glow")
+    assert "achievement unlocked" in out and "First Blood" in out
+    pytester.makepyfile("def test_one(): pass\n")
+    run(pytester, "--glow")
+    pytester.makepyfile("def test_one(): assert 0\n")
+    _, again = run(pytester, "--glow")
+    assert "First Blood" not in again
+
+
+def test_failures_are_blamed(pytester):
+    import subprocess
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=pytester.path, check=True, capture_output=True)
+
+    git("init", "-q")
+    git("config", "user.name", "Ada")
+    git("config", "user.email", "ada@example.com")
+    pytester.makepyfile(test_blamed="def test_bad():\n    assert 1 == 2\n")
+    git("add", "test_blamed.py")
+    git("commit", "-q", "-m", "a test")
+    pytester.makepyfile(test_fresh="def test_new():\n    assert 0\n")
+    _, out = run(pytester, "--glow")
+    assert "line 2 last touched by you, just now" in out
+    assert "not committed yet" in out
+
+
+def test_no_blame_outside_git(pytester):
+    pytester.makepyfile("def test_bad():\n    assert 1 == 2\n")
+    _, out = run(pytester, "--glow")
+    assert "last touched" not in out and "not committed" not in out
