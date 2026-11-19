@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+- Failures that failed the same way are grouped under one traceback.
+- Clickable paths for tests, files and failures (OSC 8); `PYTEST_GLOW_LINK` picks the URL.
+- A test running for over 3s shows the line it's stuck on and what it's waiting in.
+- The slowest fixtures, with setup and teardown time.
+
 ## [0.2.0] - 2026-11-19
 
 - Truecolor gradients throughout; the live bar shimmers and freshly finished tests flash in the file strips.

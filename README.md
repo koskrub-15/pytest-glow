@@ -9,7 +9,8 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 
 **While the tests run**
 - a line per running file: a spinner, a segmented bar where every test lights up green, red or yellow, counts and a clock
-- the test that's running right now, with a ticking timer once it gets slow (hangs are easy to spot)
+- the test that's running right now, with a ticking timer once it gets slow, and after 3s the line it's stuck
+  on, with the call it's waiting in (`⏳ api.py:6 fetch_user  replies.get(timeout=30)  → threading.py wait`)
 - under pytest-xdist, a line per worker: what it's running, for how long, and how many tests it has done
 - an overall progress bar with an ETA, which turns red the moment something fails
 - failures as one-liners as soon as they happen, so you don't wait for the end of the run to see them
@@ -20,7 +21,11 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 - diffs for failed `==` asserts on dicts, lists, sets, strings, numbers, dataclasses and namedtuples: only what
   changed, nested paths like `user.address.city`, changed characters lit up. The failure one-liners say it
   too: `role: 'user' → 'admin'` instead of `assert {'name': 'gra...active': True} == {...}`
+- failures that failed the same way (same place, same message) grouped under one traceback: a database
+  that's down is one failure with "+39 more like this", not forty tracebacks
 - warnings grouped by message, the slowest tests, a short list of what failed
+- the slowest fixtures, with setup and teardown apart, per call, and their share of the run
+- paths you can click: tests, files and failures open in the editor (VS Code's terminal opens at the line)
 - a verdict panel with the counts and a proportional bar
 - the command to rerun just the failures (`pytest --lf` when there are many)
 
@@ -78,6 +83,7 @@ Just run `pytest`. Everything else is optional:
 | `--glow-boss` or `PYTEST_GLOW_BOSS=1` | fight the suite as a boss; `glow_boss = true` in the ini to keep it on |
 | `--glow-sound` or `PYTEST_GLOW_SOUND=1` | 8-bit sounds for combos, the boss and the end of the run (terminal only); `glow_sound = true` in the ini |
 | `--glow-share[=PATH]` | save the run as an SVG card, `glow-card.svg` by default |
+| `PYTEST_GLOW_LINK` | where clickable paths go, e.g. `pycharm://open?file={path}&line={line}`; `off` to turn them off |
 | `-v` | also list every test as it finishes |
 | `-q` | only failures and the final summary |
 | `--tb=short/line/native` | pytest's own traceback text instead of rich tracebacks; `--tb=no` hides them |
