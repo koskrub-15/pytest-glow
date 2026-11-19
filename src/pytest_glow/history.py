@@ -42,6 +42,11 @@ class History:
         self.best: dict[str, float] = dict(data.get("best", {}))  # fastest green run, by number of tests
         self.achievements: dict[str, int] = dict(data.get("achievements", {}))  # key -> when unlocked
         self.greens: int = int(data.get("greens", 0))  # green runs in a row, beyond the runs kept
+        self.life: dict[str, Any] = dict(data.get("life", {}))  # totals since glow first ran here
+
+    @property
+    def xp(self) -> int:
+        return int(self.life.get("xp", 0))
 
     @property
     def enabled(self) -> bool:
@@ -126,6 +131,46 @@ class History:
         self.runs.append(run)
         self.runs = self.runs[-MAX_RUNS:]
 
+    def tally(
+        self,
+        *,
+        ok: bool,
+        counts: dict[str, int],
+        duration: float,
+        hour: int,
+        xp: int,
+        max_combo: int,
+        fixed: int,
+        shiny: bool,
+        boss: str | None = None,
+        loot: str | None = None,
+    ) -> None:
+        """Add a run to the lifetime totals. ``boss``: "won" or "lost" when there was a fight."""
+        life = self.life
+        life.setdefault("since", round(time.time()))
+
+        def add(key: str, n: float) -> None:
+            life[key] = life.get(key, 0) + n
+
+        add("runs", 1)
+        add("greens", int(ok))
+        add("tests", sum(counts.values()))
+        add("passed", counts.get("passed", 0))
+        add("failed", counts.get("failed", 0) + counts.get("error", 0))
+        add("time", round(duration, 2))
+        add("xp", xp)
+        add("fixed", fixed)
+        add("shiny", int(shiny))
+        if boss:
+            add(f"boss_{boss}", 1)
+        life["best_combo"] = max(life.get("best_combo", 0), max_combo)
+        life["best_streak"] = max(life.get("best_streak", 0), self.greens)
+        hours = list(life.get("hours", [0] * 24))
+        hours[hour % 24] += 1
+        life["hours"] = hours
+        if loot and loot not in life.get("loot", []):
+            life["loot"] = [*life.get("loot", []), loot]
+
     def save(self) -> None:
         if self.cache is None:
             return
@@ -139,6 +184,7 @@ class History:
                     "best": self.best,
                     "achievements": self.achievements,
                     "greens": self.greens,
+                    "life": self.life,
                 },
             )
 

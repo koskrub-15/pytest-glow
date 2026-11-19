@@ -344,3 +344,61 @@ def test_short_paths():
     site = os.path.join(os.sep, "venv", "lib", "site-packages", "requests", "api.py")
     assert short_path(site, here) == "requests/api.py"
     assert short_path(os.path.join(os.sep, "usr", "lib", "python3", "socket.py"), here) == "socket.py"
+
+
+def test_levels():
+    from pytest_glow import progress
+
+    assert progress.level_of(0) == (1, 0, 100)
+    assert progress.level_of(99) == (1, 99, 100)
+    assert progress.level_of(100) == (2, 0, 150)
+    assert progress.level_of(100 + 150 + 10) == (3, 10, 200)
+    assert progress.title(1) == "Print Debugger"
+    assert progress.title(4) == "Assert Apprentice"
+    assert progress.title(99) == "The One Who Runs pytest"
+
+
+def test_xp_for_a_run():
+    from pytest_glow import progress
+
+    assert progress.xp_for(passed=10, ok=True, max_combo=0, fixed=0, boss_won=False, shiny=False) == 35
+    assert progress.xp_for(passed=10, ok=False, max_combo=0, fixed=0, boss_won=False, shiny=False) == 10
+    huge = progress.xp_for(passed=50_000, ok=True, max_combo=42, fixed=2, boss_won=True, shiny=True)
+    assert huge == progress.MAX_PASS_XP + 25 + 8 + 20 + 100 + 250
+
+
+def test_xp_line():
+    from pytest_glow import progress
+
+    assert progress.xp_line(0, 35).plain == "✦ +35 XP  Lv 1 Print Debugger ▰▰▰▰▱▱▱▱▱▱ 35/100"
+    up = progress.xp_line(90, 400).plain
+    assert up.startswith("⬆ LEVEL UP  Lv 4 · Assert Apprentice  new title!")
+    assert up.endswith("+400 XP")
+    assert "new title" not in progress.xp_line(90, 20).plain
+
+
+def test_lifetime_tally():
+    from pytest_glow.history import History
+
+    h = History(None)
+    for hour, ok in ((23, True), (23, False), (9, True)):
+        h.greens = h.greens + 1 if ok else 0
+        h.tally(
+            ok=ok,
+            counts={"passed": 3, "failed": 0 if ok else 1},
+            duration=1.5,
+            hour=hour,
+            xp=30,
+            max_combo=12,
+            fixed=0,
+            shiny=False,
+            boss="won" if ok else "lost",
+            loot="🥄 Spoon" if ok else None,
+        )
+    life = h.life
+    assert (life["runs"], life["greens"], life["tests"], life["failed"], life["xp"]) == (3, 2, 10, 1, 90)
+    assert life["hours"][23] == 2 and life["hours"][9] == 1
+    assert (life["boss_won"], life["boss_lost"]) == (2, 1)
+    assert life["loot"] == ["🥄 Spoon"]
+    assert life["best_combo"] == 12 and life["best_streak"] == 1
+    assert h.xp == 90

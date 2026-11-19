@@ -23,7 +23,7 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, hang, render, share, sound
+from . import __version__, hang, progress, render, share, sound
 from . import achievements as ach
 from . import coverage as cov
 from . import diff as assert_diff
@@ -187,6 +187,8 @@ class GlowReporter(TerminalReporter):
         self._max_combo = 0
         self._combo_broken: tuple[int, float] | None = None  # (combo, when)
         self._oldest_blame: float | None = None
+        self._xp: tuple[int, int] | None = None  # (XP before this run, XP it earned)
+        self._fixed = 0
         self._fight = Fight.for_project(config.rootpath.name) if flag(config, "boss") else None
         self._last_hit: float | None = None
         # sound only in an interactive terminal: never in CI or a pipe
@@ -1230,6 +1232,25 @@ class GlowReporter(TerminalReporter):
             if a.key not in history.achievements:
                 history.achievements[a.key] = now
                 self._unlocked.append(a)
+        self._fixed = sum(1 for streak in fixed_streaks if streak)
+        gained = progress.xp_for(
+            passed=self._counts.get("passed", 0),
+            ok=ok,
+            max_combo=self._max_combo,
+            fixed=self._fixed,
+            boss_won=self._boss_won(),
+            shiny=False,
+        )
+        self._xp = (history.xp, gained)
+
+    def _boss_won(self) -> bool:
+        return self._fight is not None and self._done > 0 and not self._failing()
+
+    def _leveled_up(self) -> bool:
+        if self._xp is None:
+            return False
+        before, gained = self._xp
+        return progress.level_of(before + gained)[0] > progress.level_of(before)[0]
 
     def _print_achievements(self) -> None:
         if not self._unlocked:
@@ -1330,6 +1351,8 @@ class GlowReporter(TerminalReporter):
             elif not self._history.runs:
                 line4.append("  first run here — history starts now", style="dim")
             lines.append(line4)
+            if self._xp is not None:
+                lines.append(progress.xp_line(*self._xp))
 
         self.console.print()
         if self._failures and not getattr(self, "no_summary", False):
@@ -1366,7 +1389,7 @@ class GlowReporter(TerminalReporter):
 
         if self._live_enabled and not os.environ.get("CI"):
             confetti = None
-            if self._new_pb is not None or self._unlocked:
+            if self._new_pb is not None or self._unlocked or self._leveled_up():
                 confetti = render.Confetti(self.console.width)
             length = CELEBRATE if confetti else REVEAL
 
@@ -1396,6 +1419,8 @@ class GlowReporter(TerminalReporter):
                 return "boss_down"
         if failing:
             return "sad_trombone"
+        if self._leveled_up():
+            return "level_up"
         return "airhorn" if self._new_pb or self._unlocked else "level_clear"
 
     def _save_card(self, icon: str, word: str, stops: tuple, counts: Counter, details: list) -> None:
@@ -1425,4 +1450,15 @@ class GlowReporter(TerminalReporter):
             measured = (self._coverage.total, {f.path: f.percent for f in self._coverage.files})
         commit = head(str(self.config.rootpath)) if not failing else None
         self._history.record(results, self._duration, ok=not failing, failed=failing, coverage=measured, commit=commit)
+        self._history.tally(
+            ok=not failing,
+            counts=dict(self._counts),
+            duration=self._duration,
+            hour=self._hour,
+            xp=self._xp[1] if self._xp else 0,
+            max_combo=self._max_combo,
+            fixed=self._fixed,
+            shiny=False,
+            boss=None if self._fight is None else "won" if self._boss_won() else "lost",
+        )
         self._history.save()

@@ -601,3 +601,13 @@ def test_no_fixture_section_for_quick_fixtures(pytester):
     pytester.makepyfile("import pytest\n@pytest.fixture\ndef f(): pass\ndef test_a(f): pass\n")
     _, out = run(pytester, "--glow")
     assert "slowest fixtures" not in out
+
+
+def test_xp_and_level_up(pytester):
+    pytester.makepyfile("import pytest\n@pytest.mark.parametrize('i', range(80))\ndef test_a(i): pass\n")
+    _, out = run(pytester, "--glow")
+    assert "⬆ LEVEL UP  Lv 2 · Print Debugger  +121 XP" in out  # 80 passed, green, combo ×80
+    pytester.makepyfile("def test_a(): pass\n")
+    _, out = run(pytester, "--glow")
+    assert "✦ +26 XP  Lv 2 Print Debugger" in out
+    assert "47/150" in out
