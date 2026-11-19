@@ -346,3 +346,25 @@ def test_assertion_temporaries_stay_hidden_without_a_diff(pytester):
     _, out = run(pytester, "--glow")
     assert "data = {'a': 1}" in out
     assert "@py_assert" not in out
+
+
+def test_rerun_hint(pytester):
+    pytester.makepyfile(test_r="import pytest\n\n@pytest.mark.parametrize('x', ['a b'])\ndef test_bad(x): assert 0\n")
+    _, out = run(pytester, "--glow")
+    assert "↻ rerun  pytest 'test_r.py::test_bad[a b]'" in out
+
+
+def test_rerun_hint_uses_lf_for_many_failures(pytester):
+    pytester.makepyfile("import pytest\n\n@pytest.mark.parametrize('i', range(5))\ndef test_bad(i): assert 0\n")
+    _, out = run(pytester, "--glow")
+    assert "↻ rerun  pytest --lf" in out
+
+
+def test_slower_than_usual(pytester, monkeypatch):
+    pytester.makepyfile(test_s="import os, time\n\ndef test_nap(): time.sleep(float(os.environ['NAP']))\n")
+    monkeypatch.setenv("NAP", "0.01")
+    for _ in range(3):
+        run(pytester, "--glow")
+    monkeypatch.setenv("NAP", "0.3")
+    _, out = run(pytester, "--glow")
+    assert "🐢 slower  test_s.py::test_nap" in out and "usually" in out

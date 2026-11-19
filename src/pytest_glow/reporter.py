@@ -6,6 +6,7 @@ import contextlib
 import os
 import platform
 import re
+import shlex
 import threading
 import time
 from collections import Counter
@@ -42,6 +43,8 @@ REVEAL = 0.45  # seconds the final verdict takes to sweep in on a terminal
 CELEBRATE = 0.95  # seconds of confetti for a personal best or an achievement
 MAX_BLAMES = 10
 EASTER_EGGS = {69: "nice.", 67: "six seven 🤷"}
+MAX_RERUN_IDS = 3  # beyond this, the rerun hint is `pytest --lf`
+SLOWER = 2.0  # a test this many times its usual duration (and 100ms more) is called out
 
 
 @dataclass
@@ -810,7 +813,8 @@ class GlowReporter(TerminalReporter):
             trail = self._history.outcomes(nodeid) + {"passed": "P", "failed": "F", "error": "E"}.get(ts.outcome, "")
             if is_flaky(trail):
                 flaky.append((nodeid, trail))
-        if not (fixed or broken or flaky):
+        slower = self._slower_than_usual()
+        if not (fixed or broken or flaky or slower):
             return
         self.console.print()
         for icon, st, title, items in (("✨", "green", "fixed", fixed), ("💥", "red", "newly failing", broken)):
@@ -828,6 +832,44 @@ class GlowReporter(TerminalReporter):
                     render.outcome_trail(trail[-10:]),
                 )
             )
+        for nodeid, dur, usual in slower[:5]:
+            self._print(
+                Text.assemble(
+                    "  🐢 ",
+                    ("slower  ", "bold yellow"),
+                    render.nodeid_text(nodeid),
+                    ("  " + render.fmt_dur(dur), "bold yellow"),
+                    (f", usually {render.fmt_dur(usual)} ", "dim"),
+                    (f"×{dur / usual:.1f}", "yellow"),
+                )
+            )
+        if len(slower) > 5:
+            self._print(Text(f"     … and {len(slower) - 5} more slower than usual", style="dim"))
+
+    def _rerun_command(self) -> str | None:
+        """What to type to run just the failures again: their ids, or --lf when there are many."""
+        nodeids = list(dict.fromkeys(f.report.nodeid for f in self._failures if f.report.nodeid))
+        if not nodeids:
+            return None
+        if len(nodeids) > MAX_RERUN_IDS and self._history.enabled:
+            return "pytest --lf"
+        root, here = str(self.config.rootpath), str(self.config.invocation_params.dir)
+        args = []
+        for nodeid in nodeids[:MAX_RERUN_IDS]:
+            path, sep, rest = nodeid.partition("::")
+            args.append(shlex.quote(os.path.relpath(os.path.join(root, path), here) + sep + rest))
+        more = len(nodeids) - MAX_RERUN_IDS
+        return "pytest " + " ".join(args) + (f"  # +{more} more" if more > 0 else "")
+
+    def _slower_than_usual(self) -> list[tuple[str, float, float]]:
+        out = []
+        for nodeid, ts in self._tests.items():
+            if not ts.finished or ts.outcome not in ("passed", "failed"):
+                continue
+            usual = self._history.median_duration(nodeid)
+            if usual and ts.duration >= usual * SLOWER and ts.duration - usual >= 0.1:
+                out.append((nodeid, ts.duration, usual))
+        return sorted(out, key=lambda t: t[1] / t[2], reverse=True)
 
     def _failing(self) -> int:
         failing = sum(self._counts[c] for c in render.FAILING) + len(self._collect_errors)
@@ -969,6 +1011,9 @@ class GlowReporter(TerminalReporter):
                 )
             if len(self._failures) > 15:
                 self._print(Text(f"    … and {len(self._failures) - 15} more", style="dim"))
+            rerun = self._rerun_command()
+            if rerun:
+                self._print(Text.assemble(("  ↻ rerun  ", "bold cyan"), (rerun, "cyan")))
         title = Text(f" pytest-glow {__version__} ", style="dim")
 
         def panel(reveal: float = 1.0, now: float | None = None) -> render.GlowPanel:
