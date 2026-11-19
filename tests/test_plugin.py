@@ -346,3 +346,95 @@ def test_assertion_temporaries_stay_hidden_without_a_diff(pytester):
     _, out = run(pytester, "--glow")
     assert "data = {'a': 1}" in out
     assert "@py_assert" not in out
+
+
+def test_rerun_hint(pytester):
+    pytester.makepyfile(test_r="import pytest\n\n@pytest.mark.parametrize('x', ['a b'])\ndef test_bad(x): assert 0\n")
+    _, out = run(pytester, "--glow")
+    assert "↻ rerun  pytest 'test_r.py::test_bad[a b]'" in out
+
+
+def test_rerun_hint_uses_lf_for_many_failures(pytester):
+    pytester.makepyfile("import pytest\n\n@pytest.mark.parametrize('i', range(5))\ndef test_bad(i): assert 0\n")
+    _, out = run(pytester, "--glow")
+    assert "↻ rerun  pytest --lf" in out
+
+
+def test_slower_than_usual(pytester, monkeypatch):
+    pytester.makepyfile(test_s="import os, time\n\ndef test_nap(): time.sleep(float(os.environ['NAP']))\n")
+    monkeypatch.setenv("NAP", "0.01")
+    for _ in range(3):
+        run(pytester, "--glow")
+    monkeypatch.setenv("NAP", "0.3")
+    _, out = run(pytester, "--glow")
+    assert "🐢 slower  test_s.py::test_nap" in out and "usually" in out
+
+
+def _git_repo(pytester):
+    import subprocess
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=pytester.path, check=True, capture_output=True)
+
+    git("init", "-q")
+    git("config", "user.name", "Ada")
+    git("config", "user.email", "ada@example.com")
+    return git
+
+
+def test_changes_since_the_last_green_run(pytester):
+    import os
+    import time
+
+    git = _git_repo(pytester)
+    pytester.makepyfile(
+        lib="def double(x): return x * 2\n", test_lib="from lib import double\ndef test_d(): assert double(2) == 4\n"
+    )
+    pytester.makefile(".txt", notes="untouched\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "green")
+    run(pytester, "--glow")
+    later = time.time() + 5  # mtimes are coarse on some filesystems
+    pytester.makepyfile(lib="def double(x): return x * 3\n")
+    os.utime(pytester.path / "lib.py", (later, later))
+    _, out = run(pytester, "--glow")
+    assert "changed since the last green run" in out
+    assert "\n     lib.py\n" in out
+    assert "notes.txt" not in out
+
+
+def test_nothing_changed_hints_at_flakiness(pytester, monkeypatch):
+    git = _git_repo(pytester)
+    pytester.makepyfile(test_f="import os\ndef test_f(): assert not os.environ.get('BREAK')\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "green")
+    run(pytester, "--glow")
+    monkeypatch.setenv("BREAK", "1")
+    _, out = run(pytester, "--glow")
+    assert "nothing changed in git since the last green run" in out
+
+
+def test_changed_files_the_failure_points_at_come_first(pytester):
+    import os
+    import time
+
+    git = _git_repo(pytester)
+    pytester.makepyfile(aaa="X = 1\n", test_z="def test_z():\n    assert True\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "green")
+    run(pytester, "--glow")
+    pytester.makepyfile(test_z="def test_z():\n    assert False\n")
+    pytester.makepyfile(aaa="X = 2\n")
+    later = time.time() + 5
+    os.utime(pytester.path / "test_z.py", (later, later))
+    os.utime(pytester.path / "aaa.py", (later + 5, later + 5))  # newer, but not where it fails
+    _, out = run(pytester, "--glow")
+    assert out.index("test_z.py  ← failing here") < out.index("     aaa.py")
+
+
+def test_max_combo_in_the_verdict(pytester):
+    pytester.makepyfile(
+        test_c="import pytest\n\n@pytest.mark.parametrize('i', range(40))\ndef test_c(i): assert i != 30\n"
+    )
+    _, out = run(pytester, "--glow")
+    assert "max combo ×30" in out

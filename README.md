@@ -12,6 +12,7 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 - the test that's running right now, with a ticking timer once it gets slow (hangs are easy to spot)
 - an overall progress bar with an ETA, which turns red the moment something fails
 - failures as one-liners as soon as they happen, so you don't wait for the end of the run to see them
+- a combo counter for passes in a row, heating up as it grows, and a COMBO BREAKER when one fails
 
 **At the end**
 - rich tracebacks: highlighted source, locals (without pytest's `@py_assert` noise), captured output
@@ -20,16 +21,19 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
   too: `role: 'user' → 'admin'` instead of `assert {'name': 'gra...active': True} == {...}`
 - warnings grouped by message, the slowest tests, a short list of what failed
 - a verdict panel with the counts and a proportional bar
+- the command to rerun just the failures (`pytest --lf` when there are many)
 
 **Across runs** (kept in `.pytest_cache`, nothing to set up)
 - green streaks, and the tests that were just *fixed* or just *started failing*
 - flaky tests, with their recent pass/fail trail
 - "faster/slower than last run", tests that got slower than usual, a sparkline of recent runs
+- on a red run, what changed in git since the last green one, with the files the failures point at first;
+  and when nothing changed, a hint that it's likely flaky, the environment or data
 
 **Pure showing off** (all of it remembered in `.pytest_cache` too)
 - personal bests: the fastest green run for a given number of tests, `🏆 new PB` when you beat it
 - achievements, each unlocked once per project: First Blood, Phoenix, Night Owl, Minimalist, Sniper,
-  Speedrunner, Surgeon, Clean Sweep, Centurion
+  Speedrunner, Surgeon, Clean Sweep, Centurion, Friday Deploy, Archaeologist, Glass Cannon, Unstoppable
 - a burst of confetti over the verdict when you set a record or unlock something (never in CI or pipes)
 - under each failure, who last touched the failing line and when, from `git blame`
 - a duration sparkline next to each of the slowest tests, so you see the ones getting slower

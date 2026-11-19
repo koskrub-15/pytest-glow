@@ -132,6 +132,10 @@ def facts(**kw):
         ({"longest_fixed_streak": 5}, "surgeon"),
         ({"done": 120, "counts": Counter(passed=120)}, "clean_sweep"),
         ({"green_streak": 100}, "centurion"),
+        ({"weekday": 4, "hour": 18}, "friday_deploy"),
+        ({"ok": False, "oldest_blame": 6 * 365 * 86400}, "archaeologist"),
+        ({"ok": False, "coverage_total": 100.0}, "glass_cannon"),
+        ({"max_combo": 100}, "unstoppable"),
     ],
 )
 def test_achievements(kw, key):
@@ -177,3 +181,8 @@ def test_personal_best_only_counts_green_runs_of_the_same_size():
     assert history.personal_best(1) == 2.0
     assert history.personal_best(2) == 0.5
     assert history.greens == 1
+
+
+def test_combos_heat_up():
+    assert render.combo_stops(10) == render.GRADIENTS["cyan"]
+    assert render.combo_stops(150) == render.GRADIENTS["fire"]

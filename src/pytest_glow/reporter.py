@@ -6,6 +6,7 @@ import contextlib
 import os
 import platform
 import re
+import shlex
 import threading
 import time
 from collections import Counter
@@ -25,7 +26,7 @@ from . import __version__, render
 from . import achievements as ach
 from . import coverage as cov
 from . import diff as assert_diff
-from .blame import blame, describe
+from .blame import ago, blame, changed_since, describe, head
 from .history import History, is_flaky
 
 SUMMARY_EXIT_CODES = (
@@ -42,6 +43,10 @@ REVEAL = 0.45  # seconds the final verdict takes to sweep in on a terminal
 CELEBRATE = 0.95  # seconds of confetti for a personal best or an achievement
 MAX_BLAMES = 10
 EASTER_EGGS = {69: "nice.", 67: "six seven 🤷"}
+COMBO_SHOWN = 10  # passes in a row before the live view starts counting a combo
+COMBO_BROKEN = 1.5  # seconds a broken combo stays on screen
+MAX_RERUN_IDS = 3  # beyond this, the rerun hint is `pytest --lf`
+SLOWER = 2.0  # a test this many times its usual duration (and 100ms more) is called out
 
 
 @dataclass
@@ -127,10 +132,16 @@ class GlowReporter(TerminalReporter):
         self._collect_spinner = Spinner("dots", style="magenta")
         self._history = History(getattr(config, "cache", None))
         self._coverage: cov.CoverageResult | None = None
-        self._hour = time.localtime().tm_hour
+        started = time.localtime()
+        self._hour, self._weekday = started.tm_hour, started.tm_wday
+        self._combo = 0
+        self._max_combo = 0
+        self._combo_broken: tuple[int, float] | None = None  # (combo, when)
+        self._oldest_blame: float | None = None
         self._duration = 0.0
         self._new_pb: float | None = None  # the record this run just beat
         self._unlocked: list[ach.Achievement] = []
+        self._blamed_paths: set[str] = set()  # rootdir-relative files the failures point at
 
     # -- output plumbing ---------------------------------------------------------------
     # Other plugins (xdist, coverage, ...) write through the terminal reporter. While the
@@ -396,6 +407,13 @@ class GlowReporter(TerminalReporter):
             fs.done += 1
             fs.categories.append(ts.outcome)
             fs.finished_at.append(now)
+            if ts.outcome == "passed":
+                self._combo += 1
+                self._max_combo = max(self._max_combo, self._combo)
+            elif ts.outcome in render.FAILING:
+                if self._combo >= COMBO_SHOWN:
+                    self._combo_broken = (self._combo, now)
+                self._combo = 0
             fs.counts[ts.outcome] += 1
             fs.duration += ts.duration
             fs.total = max(fs.total, fs.done)
@@ -506,6 +524,9 @@ class GlowReporter(TerminalReporter):
                 Text("eta " + (render.fmt_clock(eta) if eta is not None else "…"), style="dim"),
             )
             parts += [Text(""), overall]
+            combo = self._combo_line(now)
+            if combo is not None:
+                parts.append(combo)
             if self._status and self._verbose > 0:
                 parts.append(Text(self._status, style="dim"))
             return Group(*parts)
@@ -573,6 +594,7 @@ class GlowReporter(TerminalReporter):
             self._print_slowest()
             self._print_insights()
             self._print_achievements()
+            self._print_changes()
         if session.shouldfail:
             self._print(Text(f"  ! {session.shouldfail}", style="bold red"))
         elif session.shouldstop:
@@ -656,9 +678,13 @@ class GlowReporter(TerminalReporter):
             path = os.path.normpath(os.path.join(here, str(loc.path)))
             if not path.startswith(root + os.sep) or "site-packages" in path.split(os.sep):
                 continue
+            self._blamed_paths.add(os.path.relpath(path, root))
             found = blame(path, loc.lineno)
             if found is None:
                 return None
+            if found.when is not None:
+                age = time.time() - found.when
+                self._oldest_blame = max(age, self._oldest_blame or 0)
             return f"line {loc.lineno} {describe(found)}"
         return None
 
@@ -810,7 +836,8 @@ class GlowReporter(TerminalReporter):
             trail = self._history.outcomes(nodeid) + {"passed": "P", "failed": "F", "error": "E"}.get(ts.outcome, "")
             if is_flaky(trail):
                 flaky.append((nodeid, trail))
-        if not (fixed or broken or flaky):
+        slower = self._slower_than_usual()
+        if not (fixed or broken or flaky or slower):
             return
         self.console.print()
         for icon, st, title, items in (("✨", "green", "fixed", fixed), ("💥", "red", "newly failing", broken)):
@@ -828,6 +855,90 @@ class GlowReporter(TerminalReporter):
                     render.outcome_trail(trail[-10:]),
                 )
             )
+        for nodeid, dur, usual in slower[:5]:
+            self._print(
+                Text.assemble(
+                    "  🐢 ",
+                    ("slower  ", "bold yellow"),
+                    render.nodeid_text(nodeid),
+                    ("  " + render.fmt_dur(dur), "bold yellow"),
+                    (f", usually {render.fmt_dur(usual)} ", "dim"),
+                    (f"×{dur / usual:.1f}", "yellow"),
+                )
+            )
+        if len(slower) > 5:
+            self._print(Text(f"     … and {len(slower) - 5} more slower than usual", style="dim"))
+
+    def _combo_line(self, now: float) -> Text | None:
+        broken = self._combo_broken
+        if broken is not None and now - broken[1] < COMBO_BROKEN and self._combo < COMBO_SHOWN:
+            return Text.assemble("  ", ("💔 COMBO BREAKER", "bold red"), (f"  ×{broken[0]}", "red"))
+        if self._combo < COMBO_SHOWN:
+            return None
+        line = Text("  ⚡ ")
+        line.append_text(render.gradient_text(f"×{self._combo} COMBO", render.combo_stops(self._combo)))
+        if self._max_combo > self._combo:
+            line.append(f"  best ×{self._max_combo}", style="dim")
+        return line
+
+    def _print_changes(self) -> None:
+        """On a red run: what changed in git since the last green one."""
+        if not self._failing() or not self._history.enabled:
+            return
+        green = self._history.last_green()
+        if green is None:
+            return
+        root = str(self.config.rootpath)
+        changed = changed_since(root, green["g"], green.get("t", 0))
+        if changed is None:
+            return
+        when = ago(time.time() - green.get("t", time.time()))
+        self.console.print()
+        if not changed:
+            self._print(
+                Text.assemble(
+                    "  🔍 ",
+                    ("nothing changed", "bold"),
+                    (f" in git since the last green run, {when} — flaky, environment or data?", "dim"),
+                )
+            )
+            return
+        self._print(Text.assemble("  🔍 ", ("changed since the last green run", "bold"), (f", {when}", "dim")))
+        suspects = self._blamed_paths | {render.file_of(f.report.nodeid) for f in self._failures}
+        suspects |= {render.file_of(r.nodeid) for r in self._collect_errors if r.nodeid}
+        changed.sort(key=lambda p: p not in suspects)  # stable: the suspects first, newest first within
+        for path in changed[:8]:
+            line = Text("     ") + render.path_text(path)
+            if path in suspects:
+                line.append("  ← failing here", style="bold red")
+            self._print(line)
+        if len(changed) > 8:
+            self._print(Text(f"     … and {len(changed) - 8} more", style="dim"))
+
+    def _rerun_command(self) -> str | None:
+        """What to type to run just the failures again: their ids, or --lf when there are many."""
+        nodeids = list(dict.fromkeys(f.report.nodeid for f in self._failures if f.report.nodeid))
+        if not nodeids:
+            return None
+        if len(nodeids) > MAX_RERUN_IDS and self._history.enabled:
+            return "pytest --lf"
+        root, here = str(self.config.rootpath), str(self.config.invocation_params.dir)
+        args = []
+        for nodeid in nodeids[:MAX_RERUN_IDS]:
+            path, sep, rest = nodeid.partition("::")
+            args.append(shlex.quote(os.path.relpath(os.path.join(root, path), here) + sep + rest))
+        more = len(nodeids) - MAX_RERUN_IDS
+        return "pytest " + " ".join(args) + (f"  # +{more} more" if more > 0 else "")
+
+    def _slower_than_usual(self) -> list[tuple[str, float, float]]:
+        out = []
+        for nodeid, ts in self._tests.items():
+            if not ts.finished or ts.outcome not in ("passed", "failed"):
+                continue
+            usual = self._history.median_duration(nodeid)
+            if usual and ts.duration >= usual * SLOWER and ts.duration - usual >= 0.1:
+                out.append((nodeid, ts.duration, usual))
+        return sorted(out, key=lambda t: t[1] / t[2], reverse=True)
 
     def _failing(self) -> int:
         failing = sum(self._counts[c] for c in render.FAILING) + len(self._collect_errors)
@@ -853,6 +964,9 @@ class GlowReporter(TerminalReporter):
         facts = ach.RunFacts(
             ok=ok,
             hour=self._hour,
+            weekday=self._weekday,
+            oldest_blame=self._oldest_blame,
+            max_combo=self._max_combo,
             counts=Counter(self._counts),
             done=self._done,
             warnings=len(self.stats.get("warnings", [])),
@@ -930,6 +1044,11 @@ class GlowReporter(TerminalReporter):
                 line3.append(f"  · ▲ {render.fmt_dur(delta)} slower than last run", style="yellow")
         if self._workers:
             line3.append(f"  · {len(self._workers)} workers", style="dim")
+        if self._max_combo >= 25:
+            line3.append("  · ⚡ ")
+            line3.append_text(
+                render.gradient_text(f"max combo ×{self._max_combo}", render.combo_stops(self._max_combo))
+            )
         if self._new_pb is not None:
             line3.append("  · ")
             line3.append_text(render.gradient_text("🏆 new PB", ("#facc15", "#fb923c")))
@@ -969,6 +1088,9 @@ class GlowReporter(TerminalReporter):
                 )
             if len(self._failures) > 15:
                 self._print(Text(f"    … and {len(self._failures) - 15} more", style="dim"))
+            rerun = self._rerun_command()
+            if rerun:
+                self._print(Text.assemble(("  ↻ rerun  ", "bold cyan"), (rerun, "cyan")))
         title = Text(f" pytest-glow {__version__} ", style="dim")
 
         def panel(reveal: float = 1.0, now: float | None = None) -> render.GlowPanel:
@@ -1009,5 +1131,6 @@ class GlowReporter(TerminalReporter):
         measured = None
         if self._coverage is not None:
             measured = (self._coverage.total, {f.path: f.percent for f in self._coverage.files})
-        self._history.record(results, self._duration, ok=not failing, failed=failing, coverage=measured)
+        commit = head(str(self.config.rootpath)) if not failing else None
+        self._history.record(results, self._duration, ok=not failing, failed=failing, coverage=measured, commit=commit)
         self._history.save()

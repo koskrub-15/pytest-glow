@@ -23,7 +23,12 @@ ALL = [
     Achievement("surgeon", "Surgeon", "fixed a test that had failed 5 runs in a row"),
     Achievement("clean_sweep", "Clean Sweep", "100+ tests, every one passed, not a single warning"),
     Achievement("centurion", "Centurion", "100 green runs in a row"),
+    Achievement("friday_deploy", "Friday Deploy", "green on a Friday evening. Ship it?"),
+    Achievement("archaeologist", "Archaeologist", "a failure on a line nobody touched for 5+ years"),
+    Achievement("glass_cannon", "Glass Cannon", "100% coverage, and still red"),
+    Achievement("unstoppable", "Unstoppable", "a 100-test combo"),
 ]
+YEAR = 365 * 86400
 
 
 @dataclass
@@ -32,6 +37,7 @@ class RunFacts:
     hour: int
     counts: Counter
     done: int
+    weekday: int = 0  # Monday is 0
     warnings: int = 0
     prior_runs: list[dict] = field(default_factory=list)
     green_streak: int = 0  # including this run
@@ -41,6 +47,8 @@ class RunFacts:
     coverage_total: float | None = None
     fail_under: float | None = None
     precision: int = 0
+    oldest_blame: float | None = None  # age in seconds of the oldest line a failure was blamed on
+    max_combo: int = 0
 
 
 def earned(facts: RunFacts) -> list[Achievement]:
@@ -60,5 +68,9 @@ def earned(facts: RunFacts) -> list[Achievement]:
         and facts.counts.get("passed", 0) == facts.done
         and not facts.warnings,
         "centurion": facts.ok and facts.green_streak >= 100,
+        "friday_deploy": facts.ok and facts.weekday == 4 and facts.hour >= 17,
+        "archaeologist": facts.oldest_blame is not None and facts.oldest_blame >= 5 * YEAR,
+        "glass_cannon": not facts.ok and facts.coverage_total is not None and facts.coverage_total >= 100,
+        "unstoppable": facts.max_combo >= 100,
     }
     return [a for a in ALL if hits.get(a.key)]

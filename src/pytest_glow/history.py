@@ -82,6 +82,13 @@ class History:
                 return run["c"]
         return None
 
+    def last_green(self) -> dict | None:
+        """The last green run that knows its git commit."""
+        for run in reversed(self.runs):
+            if run.get("ok") and run.get("g"):
+                return run
+        return None
+
     def last_comparable_run(self, n_tests: int) -> dict | None:
         for run in reversed(self.runs):
             if run.get("n") == n_tests:
@@ -95,6 +102,7 @@ class History:
         ok: bool,
         failed: int,
         coverage: tuple[float, dict[str, float]] | None = None,
+        commit: str | None = None,
     ) -> None:
         for nodeid, (category, dur) in results.items():
             entry = self.tests.pop(nodeid, None) or {"o": "", "d": []}
@@ -110,6 +118,8 @@ class History:
         if ok:
             key = str(len(results))
             self.best[key] = round(min(duration, self.best.get(key, duration)), 3)
+        if ok and commit:
+            run["g"] = commit
         if coverage is not None:
             run["c"] = round(coverage[0], 3)
             self.coverage.update({path: round(pct, 2) for path, pct in coverage[1].items()})

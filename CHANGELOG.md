@@ -8,7 +8,11 @@ All notable changes to this project are documented here. The format follows
 
 - Truecolor gradients throughout; the live bar shimmers and freshly finished tests flash in the file strips.
 - The verdict sweeps in on a terminal; confetti for a new personal best or an achievement.
-- Personal bests per number of tests, and nine achievements unlocked once per project.
+- Personal bests per number of tests, and thirteen achievements unlocked once per project.
+- Live combo counter for passes in a row, and the max combo in the verdict.
+- A ready-to-paste command to rerun the failures.
+- Tests that got at least twice as slow as usual are called out.
+- On a red run: what changed in git since the last green run, or a hint when nothing did.
 - `git blame` for the failing line under each failure.
 - Duration sparklines in the slowest list.
 - Easter eggs for 67 and 69 passed tests.
