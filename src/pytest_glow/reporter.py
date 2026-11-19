@@ -43,6 +43,8 @@ REVEAL = 0.45  # seconds the final verdict takes to sweep in on a terminal
 CELEBRATE = 0.95  # seconds of confetti for a personal best or an achievement
 MAX_BLAMES = 10
 EASTER_EGGS = {69: "nice.", 67: "six seven 🤷"}
+COMBO_SHOWN = 10  # passes in a row before the live view starts counting a combo
+COMBO_BROKEN = 1.5  # seconds a broken combo stays on screen
 MAX_RERUN_IDS = 3  # beyond this, the rerun hint is `pytest --lf`
 SLOWER = 2.0  # a test this many times its usual duration (and 100ms more) is called out
 
@@ -130,7 +132,12 @@ class GlowReporter(TerminalReporter):
         self._collect_spinner = Spinner("dots", style="magenta")
         self._history = History(getattr(config, "cache", None))
         self._coverage: cov.CoverageResult | None = None
-        self._hour = time.localtime().tm_hour
+        started = time.localtime()
+        self._hour, self._weekday = started.tm_hour, started.tm_wday
+        self._combo = 0
+        self._max_combo = 0
+        self._combo_broken: tuple[int, float] | None = None  # (combo, when)
+        self._oldest_blame: float | None = None
         self._duration = 0.0
         self._new_pb: float | None = None  # the record this run just beat
         self._unlocked: list[ach.Achievement] = []
@@ -400,6 +407,13 @@ class GlowReporter(TerminalReporter):
             fs.done += 1
             fs.categories.append(ts.outcome)
             fs.finished_at.append(now)
+            if ts.outcome == "passed":
+                self._combo += 1
+                self._max_combo = max(self._max_combo, self._combo)
+            elif ts.outcome in render.FAILING:
+                if self._combo >= COMBO_SHOWN:
+                    self._combo_broken = (self._combo, now)
+                self._combo = 0
             fs.counts[ts.outcome] += 1
             fs.duration += ts.duration
             fs.total = max(fs.total, fs.done)
@@ -510,6 +524,9 @@ class GlowReporter(TerminalReporter):
                 Text("eta " + (render.fmt_clock(eta) if eta is not None else "…"), style="dim"),
             )
             parts += [Text(""), overall]
+            combo = self._combo_line(now)
+            if combo is not None:
+                parts.append(combo)
             if self._status and self._verbose > 0:
                 parts.append(Text(self._status, style="dim"))
             return Group(*parts)
@@ -665,6 +682,9 @@ class GlowReporter(TerminalReporter):
             found = blame(path, loc.lineno)
             if found is None:
                 return None
+            if found.when is not None:
+                age = time.time() - found.when
+                self._oldest_blame = max(age, self._oldest_blame or 0)
             return f"line {loc.lineno} {describe(found)}"
         return None
 
@@ -849,6 +869,18 @@ class GlowReporter(TerminalReporter):
         if len(slower) > 5:
             self._print(Text(f"     … and {len(slower) - 5} more slower than usual", style="dim"))
 
+    def _combo_line(self, now: float) -> Text | None:
+        broken = self._combo_broken
+        if broken is not None and now - broken[1] < COMBO_BROKEN and self._combo < COMBO_SHOWN:
+            return Text.assemble("  ", ("💔 COMBO BREAKER", "bold red"), (f"  ×{broken[0]}", "red"))
+        if self._combo < COMBO_SHOWN:
+            return None
+        line = Text("  ⚡ ")
+        line.append_text(render.gradient_text(f"×{self._combo} COMBO", render.combo_stops(self._combo)))
+        if self._max_combo > self._combo:
+            line.append(f"  best ×{self._max_combo}", style="dim")
+        return line
+
     def _print_changes(self) -> None:
         """On a red run: what changed in git since the last green one."""
         if not self._failing() or not self._history.enabled:
@@ -932,6 +964,9 @@ class GlowReporter(TerminalReporter):
         facts = ach.RunFacts(
             ok=ok,
             hour=self._hour,
+            weekday=self._weekday,
+            oldest_blame=self._oldest_blame,
+            max_combo=self._max_combo,
             counts=Counter(self._counts),
             done=self._done,
             warnings=len(self.stats.get("warnings", [])),
@@ -1009,6 +1044,11 @@ class GlowReporter(TerminalReporter):
                 line3.append(f"  · ▲ {render.fmt_dur(delta)} slower than last run", style="yellow")
         if self._workers:
             line3.append(f"  · {len(self._workers)} workers", style="dim")
+        if self._max_combo >= 25:
+            line3.append("  · ⚡ ")
+            line3.append_text(
+                render.gradient_text(f"max combo ×{self._max_combo}", render.combo_stops(self._max_combo))
+            )
         if self._new_pb is not None:
             line3.append("  · ")
             line3.append_text(render.gradient_text("🏆 new PB", ("#facc15", "#fb923c")))

@@ -271,7 +271,15 @@ GRADIENTS: dict[str, tuple[str, ...]] = {
     "yellow": ("#ca8a04", "#eab308", "#fb923c"),
     "cyan": ("#0891b2", "#22d3ee", "#a5f3fc"),
     "grey50": ("#4b5563", "#9ca3af"),
+    "fire": ("#facc15", "#f97316", "#ef4444"),
 }
+
+
+def combo_stops(n: int) -> tuple[str, ...]:
+    """Combos heat up: cyan, green, neon, then fire."""
+    return GRADIENTS["cyan" if n < 25 else "green" if n < 50 else "glow" if n < 100 else "fire"]
+
+
 HEX = {
     "passed": "#22c55e",
     "failed": "#ef4444",

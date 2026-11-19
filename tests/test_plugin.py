@@ -430,3 +430,11 @@ def test_changed_files_the_failure_points_at_come_first(pytester):
     os.utime(pytester.path / "aaa.py", (later + 5, later + 5))  # newer, but not where it fails
     _, out = run(pytester, "--glow")
     assert out.index("test_z.py  ← failing here") < out.index("     aaa.py")
+
+
+def test_max_combo_in_the_verdict(pytester):
+    pytester.makepyfile(
+        test_c="import pytest\n\n@pytest.mark.parametrize('i', range(40))\ndef test_c(i): assert i != 30\n"
+    )
+    _, out = run(pytester, "--glow")
+    assert "max combo ×30" in out
