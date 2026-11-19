@@ -480,3 +480,30 @@ def test_boss_from_the_environment_and_ini(pytester, monkeypatch):
     pytester.makeini("[pytest]\nglow_boss = true\n")
     _, out = run(pytester, "--glow")
     assert "VICTORY" in out
+
+
+def test_share_saves_a_card(pytester):
+    pytester.makepyfile("def test_a(): pass\ndef test_b(): assert 0\n")
+    # no --glow: --glow-share asks for the glow reporter on its own
+    _, out = run(pytester, "--glow-share")
+    assert "card saved to glow-card.svg" in out
+    svg = (pytester.path / "glow-card.svg").read_text()
+    assert svg.startswith("<svg")
+    assert "passed" in svg and "failed" in svg
+    assert pytester.path.name[:20] in svg
+
+    _, out = run(pytester, "--glow-share=out/card.svg")
+    assert "couldn't save the card" in out
+
+
+def test_share_wants_svg(pytester):
+    pytester.makepyfile("def test_a(): pass\n")
+    result = pytester.runpytest_subprocess("--glow-share=card.png")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    assert "give it a .svg path" in "\n".join(result.errlines)
+
+
+def test_sound_stays_quiet_without_a_terminal(pytester):
+    pytester.makepyfile("def test_a(): pass\n")
+    result = pytester.runpytest_subprocess("--glow", "--glow-sound")
+    assert "\a" not in "\n".join(result.outlines)

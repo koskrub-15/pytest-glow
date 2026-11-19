@@ -214,3 +214,26 @@ def test_hearts():
     assert hearts(0).plain == "❤❤❤"
     assert hearts(2).plain == "❤♡♡"
     assert hearts(9).plain == "♡♡♡"
+
+
+def test_sound_falls_back_to_the_bell(monkeypatch):
+    import io
+
+    from pytest_glow import sound
+
+    monkeypatch.setattr(sound, "command", lambda kind: None)
+    out = io.StringIO()
+    sound.play("green", out)
+    assert out.getvalue() == "\a"
+
+
+def test_sound_uses_a_player_when_there_is_one(monkeypatch, tmp_path):
+    from pytest_glow import sound
+
+    (tmp_path / "complete.oga").write_bytes(b"")
+    monkeypatch.setattr(sound, "_FREEDESKTOP", str(tmp_path))
+    monkeypatch.setattr(sound.sys, "platform", "linux")
+    monkeypatch.setattr(sound.shutil, "which", lambda name: "/usr/bin/paplay" if name == "paplay" else None)
+    assert sound.command("green") == ["paplay", str(tmp_path / "complete.oga")]
+    monkeypatch.setattr(sound.shutil, "which", lambda name: None)
+    assert sound.command("green") is None

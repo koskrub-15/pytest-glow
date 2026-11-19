@@ -22,7 +22,7 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, render
+from . import __version__, render, share, sound
 from . import achievements as ach
 from . import coverage as cov
 from . import diff as assert_diff
@@ -143,6 +143,8 @@ class GlowReporter(TerminalReporter):
         self._oldest_blame: float | None = None
         self._fight = Fight.for_project(config.rootpath.name) if flag(config, "boss") else None
         self._last_hit: float | None = None
+        self._sound = flag(config, "sound")
+        self._share: str | None = config.getoption("glow_share", None)
         # under xdist: what each worker is running, and how many tests it has finished
         self._worker_now: dict[str, tuple[str, float]] = {}
         self._worker_done: Counter = Counter()
@@ -1201,6 +1203,28 @@ class GlowReporter(TerminalReporter):
                     live.update(frame(elapsed))
                     time.sleep(1 / 60)
         self.console.print(panel())
+        if self._share:
+            self._save_card(icon, word, stops, counts, lines[1:])
+        if self._sound and self._live_enabled and self._done:
+            kind = "fanfare" if (self._new_pb or self._unlocked) and not failing else "red" if failing else "green"
+            sound.play(kind, self.console.file)
+
+    def _save_card(self, icon: str, word: str, stops: tuple, counts: Counter, details: list) -> None:
+        card = share.Card(
+            project=self.config.rootpath.name,
+            icon=icon,
+            word=word,
+            stops=stops,
+            counts=counts,
+            details=[line for line in details if not line.plain.startswith("runs ")],  # sparkline: too noisy for a card
+        )
+        path = os.path.join(str(self.config.invocation_params.dir), self._share)
+        try:
+            share.save(card, path)
+        except OSError as e:
+            self._print(Text(f"  couldn't save the card: {e}", style="red"))
+            return
+        self._print(Text.assemble(("  ✦ ", "magenta"), ("card saved to ", "dim"), (self._share, "bold")))
 
     def _save_history(self, exitstatus: int) -> None:
         if not self._history.enabled or not self._done or exitstatus == pytest.ExitCode.INTERRUPTED:

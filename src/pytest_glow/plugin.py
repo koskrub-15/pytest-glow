@@ -41,7 +41,22 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=None,
         help="fight the test suite as a boss (also PYTEST_GLOW_BOSS=1 or glow_boss = true in the ini)",
     )
+    group.addoption(
+        "--glow-sound",
+        action="store_true",
+        default=None,
+        help="play a sound when the run ends (also PYTEST_GLOW_SOUND=1 or glow_sound = true in the ini)",
+    )
+    group.addoption(
+        "--glow-share",
+        nargs="?",
+        const="glow-card.svg",
+        default=None,
+        metavar="PATH",
+        help="save the run as an SVG card to share (default: glow-card.svg); implies --glow",
+    )
     parser.addini("glow_boss", "fight the test suite as a boss", type="bool", default=False)
+    parser.addini("glow_sound", "play a sound when the run ends", type="bool", default=False)
 
 
 _TRUE = ("1", "true", "yes", "on")
@@ -64,6 +79,8 @@ def _wanted(config: pytest.Config) -> bool | None:
     option = config.getoption("glow", None)
     if option is not None:
         return option
+    if config.getoption("glow_share", None):
+        return True
     env = os.environ.get("PYTEST_GLOW", "").strip().lower()
     if env in ("0", "false", "no", "off"):
         return False
@@ -101,6 +118,9 @@ def _terminal_stream(force: bool):
 
 @pytest.hookimpl(trylast=True)
 def pytest_configure(config: pytest.Config) -> None:
+    share = config.getoption("glow_share", None)
+    if share and not share.lower().endswith(".svg"):
+        raise pytest.UsageError(f"--glow-share writes SVG; give it a .svg path, not {share!r}")
     wanted = _wanted(config)
     if wanted is False or not _compatible(config):
         return
