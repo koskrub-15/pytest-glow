@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import os
 import platform
+import random
 import re
 import shlex
 import threading
@@ -50,6 +51,7 @@ MAX_WORKERS_SHOWN = 8
 COMBO_SHOWN = 10  # passes in a row before the live view starts counting a combo
 COMBO_BROKEN = 1.5  # seconds a broken combo stays on screen
 MAX_RERUN_IDS = 3  # beyond this, the rerun hint is `pytest --lf`
+SHINY_ODDS = 1 / 500  # the chance that a green run comes out shiny
 SLOWER = 2.0  # a test this many times its usual duration (and 100ms more) is called out
 
 
@@ -187,6 +189,7 @@ class GlowReporter(TerminalReporter):
         self._max_combo = 0
         self._combo_broken: tuple[int, float] | None = None  # (combo, when)
         self._oldest_blame: float | None = None
+        self._shiny = False
         self._xp: tuple[int, int] | None = None  # (XP before this run, XP it earned)
         self._fixed = 0
         self._fight = Fight.for_project(config.rootpath.name) if flag(config, "boss") else None
@@ -730,6 +733,9 @@ class GlowReporter(TerminalReporter):
                 session.exitstatus = pytest.ExitCode.MAX_WARNINGS_ERROR
                 self._print(Text(f"Tests pass, but maximum allowed warnings exceeded: {n} > {max_warnings}", "red"))
         self._duration = time.monotonic() - self._t_start
+        self._shiny = bool(
+            self._done and not self._failing() and exitstatus == pytest.ExitCode.OK and random.random() < SHINY_ODDS
+        )
         self._celebrations(exitstatus)
         if show:
             self._print_slowest()
@@ -1215,6 +1221,7 @@ class GlowReporter(TerminalReporter):
             oldest_blame=self._oldest_blame,
             max_combo=self._max_combo,
             boss_slain=self._fight is not None and ok and self._done >= 100,
+            shiny=self._shiny,
             counts=Counter(self._counts),
             done=self._done,
             warnings=len(self.stats.get("warnings", [])),
@@ -1239,7 +1246,7 @@ class GlowReporter(TerminalReporter):
             max_combo=self._max_combo,
             fixed=self._fixed,
             boss_won=self._boss_won(),
-            shiny=False,
+            shiny=self._shiny,
         )
         self._xp = (history.xp, gained)
 
@@ -1279,6 +1286,9 @@ class GlowReporter(TerminalReporter):
             icon, word, st = "∅", "no tests ran", "grey50"
         else:
             icon, word, st = "✓", "all green", "green"
+        ok = word == "all green"
+        if ok and self._shiny:
+            icon, word, st = "✦", "shiny ✦", "gold"
 
         duration = self._duration
         counts = Counter(self._counts)
@@ -1296,8 +1306,12 @@ class GlowReporter(TerminalReporter):
         egg = EASTER_EGGS.get(counts.get("passed", 0))
         if egg:
             line1.append(f"  {egg}", style="dim italic")
+        if self._shiny:
+            line1.append("  a 1-in-500 run ✨", style="italic #fde68a")
         inner = max(10, self.console.width - 4)
         bar = render.proportion_bar(counts, inner) if counts else Text("━" * inner, style="grey30")
+        if self._shiny:
+            bar = render.glow_bar(1, 1, inner, stops)
 
         line3 = Text.assemble(("⏱ ", "dim"), (render.fmt_dur(duration), "bold"))
         prev = self._history.last_comparable_run(self._done) if self._done else None
@@ -1338,7 +1352,6 @@ class GlowReporter(TerminalReporter):
         if coverage_line is not None:
             lines.append(coverage_line)
         if self._history.enabled and self._done and exitstatus != pytest.ExitCode.INTERRUPTED:
-            ok = word == "all green"
             runs = [*self._history.runs[-23:], {"d": duration, "ok": ok}]
             line4 = Text.assemble(("runs ", "dim"), render.sparkline(runs))
             streak = self._history.green_streak()
@@ -1389,7 +1402,7 @@ class GlowReporter(TerminalReporter):
 
         if self._live_enabled and not os.environ.get("CI"):
             confetti = None
-            if self._new_pb is not None or self._unlocked or self._leveled_up():
+            if self._new_pb is not None or self._unlocked or self._leveled_up() or self._shiny:
                 confetti = render.Confetti(self.console.width)
             length = CELEBRATE if confetti else REVEAL
 
@@ -1419,6 +1432,8 @@ class GlowReporter(TerminalReporter):
                 return "boss_down"
         if failing:
             return "sad_trombone"
+        if self._shiny:
+            return "shiny"
         if self._leveled_up():
             return "level_up"
         return "airhorn" if self._new_pb or self._unlocked else "level_clear"
@@ -1458,7 +1473,7 @@ class GlowReporter(TerminalReporter):
             xp=self._xp[1] if self._xp else 0,
             max_combo=self._max_combo,
             fixed=self._fixed,
-            shiny=False,
+            shiny=self._shiny,
             boss=None if self._fight is None else "won" if self._boss_won() else "lost",
         )
         self._history.save()

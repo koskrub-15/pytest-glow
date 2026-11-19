@@ -18,7 +18,7 @@ import wave
 from collections.abc import Callable
 
 RATE = 22050
-REVISION = 3  # bump when a sound changes, so the cached files get rebuilt
+REVISION = 4  # bump when a sound changes, so the cached files get rebuilt
 HIT_GAP = 0.12  # at most this often a hit sound, or a fast suite turns into a drum roll
 COMBO_MILESTONES = (10, 25, 50, 100, 250, 500, 1000)
 
@@ -131,6 +131,16 @@ def level_up() -> Samples:
     return seq(*first, rest(0.03), *second, ring)
 
 
+def shiny() -> Samples:
+    """A shiny run: a sparkle up and down, then a shimmer."""
+    up = [tone(note(n), 0.05, "pulse", 0.18) for n in ("E6", "G#6", "B6", "E7")]
+    down = [tone(note(n), 0.05, "tri", 0.2, cutoff=None) for n in ("B6", "G#6", "B6", "E7")]
+    shimmer = mix(
+        *(tone(note(n), 0.9, "tri", 0.12, vibrato=0.01, release=0.7, cutoff=None) for n in ("E6", "B6", "E7"))
+    )
+    return seq(*up, *down, shimmer)
+
+
 def sad_trombone() -> Samples:
     """A red run: wah, wah, wah, waaaah."""
     wahs = [
@@ -209,6 +219,7 @@ def game_over() -> Samples:
 SOUNDS: dict[str, Callable[[], Samples]] = {
     "level_clear": level_clear,
     "level_up": level_up,
+    "shiny": shiny,
     "sad_trombone": sad_trombone,
     "airhorn": airhorn,
     "combo_breaker": combo_breaker,

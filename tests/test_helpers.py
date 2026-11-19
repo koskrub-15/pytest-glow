@@ -137,6 +137,7 @@ def facts(**kw):
         ({"ok": False, "coverage_total": 100.0}, "glass_cannon"),
         ({"max_combo": 100}, "unstoppable"),
         ({"boss_slain": True}, "boss_slayer"),
+        ({"shiny": True}, "shiny_hunter"),
     ],
 )
 def test_achievements(kw, key):

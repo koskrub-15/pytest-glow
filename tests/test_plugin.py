@@ -611,3 +611,24 @@ def test_xp_and_level_up(pytester):
     _, out = run(pytester, "--glow")
     assert "✦ +26 XP  Lv 2 Print Debugger" in out
     assert "47/150" in out
+
+
+SHINY = "import pytest_glow.reporter\npytest_glow.reporter.SHINY_ODDS = 1.0\n"
+
+
+def test_shiny_run(pytester):
+    pytester.makeconftest(SHINY)
+    pytester.makepyfile("def test_a(): pass\n")
+    _, out = run(pytester, "--glow")
+    assert "✦ SHINY ✦" in out
+    assert "a 1-in-500 run" in out
+    assert "Shiny Hunter" in out
+    assert "+276 XP" in out  # 1 passed + 25 for green + 250 for shiny
+
+
+def test_red_runs_are_never_shiny(pytester):
+    pytester.makeconftest(SHINY)
+    pytester.makepyfile("def test_a(): assert 0\n")
+    _, out = run(pytester, "--glow")
+    assert "SHINY" not in out
+    assert "FAILED" in out
