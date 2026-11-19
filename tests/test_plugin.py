@@ -507,3 +507,31 @@ def test_sound_stays_quiet_without_a_terminal(pytester):
     pytester.makepyfile("def test_a(): pass\n")
     result = pytester.runpytest_subprocess("--glow", "--glow-sound")
     assert "\a" not in "\n".join(result.outlines)
+
+
+def test_same_failures_are_grouped(pytester):
+    pytester.makepyfile(
+        test_db="""
+        import pytest
+
+        class Box:
+            pass
+
+        @pytest.fixture
+        def db():
+            raise ConnectionError(f"no database, see {Box()!r}")
+
+        @pytest.mark.parametrize("i", range(4))
+        def test_query(db, i):
+            pass
+
+        def test_math():
+            assert 1 == 2
+        """
+    )
+    _, out = run(pytester, "--glow")
+    assert "failures (5 · 2 distinct)" in out
+    assert "⧉ the same failure in 3 more tests" in out
+    assert "test_db.py::test_query[3]" in out
+    assert "test_query[0] (setup)  +3 more like this  ConnectionError" in out
+    assert out.count("Traceback") == 2

@@ -81,6 +81,24 @@ class Failure:
 
 
 _WARNING_LOCATION = re.compile(r"^\S+:\d+: ")
+_ADDRESS = re.compile(r"0x[0-9a-fA-F]{6,}")
+MAX_GROUPED_IDS = 8
+
+
+def _signature(report: Any) -> tuple | None:
+    """Failures with the same signature failed the same way: same place, same message."""
+    crash = getattr(report.longrepr, "reprcrash", None)
+    if crash is None:
+        return None
+    return (report.when, str(crash.path), crash.lineno, _ADDRESS.sub("0x…", render.crash_message(report)))
+
+
+def group_failures(failures: list) -> list[list]:
+    """Failures grouped by signature, in the order each group first failed."""
+    groups: dict[Any, list] = {}
+    for i, failure in enumerate(failures):
+        groups.setdefault(_signature(failure.report) or i, []).append(failure)
+    return list(groups.values())
 
 
 def _markup_style(markup: dict) -> str:
@@ -681,8 +699,10 @@ class GlowReporter(TerminalReporter):
     def _print_failures(self) -> None:
         if not self._failures or self._tbstyle == "no":
             return
-        self._rule(f"failures ({len(self._failures)})", "red")
-        for i, failure in enumerate(self._failures):
+        groups = group_failures(self._failures)
+        distinct = f" · {len(groups)} distinct" if len(groups) < len(self._failures) else ""
+        self._rule(f"failures ({len(self._failures)}{distinct})", "red")
+        for i, (failure, *same) in enumerate(groups):
             report = failure.report
             title = Text.assemble(("✗ ", "bold red"), render.nodeid_text(report.nodeid))
             if report.when != "call":
@@ -702,6 +722,8 @@ class GlowReporter(TerminalReporter):
             if failure.diff is not None and self._tbstyle in ("auto", "long"):
                 title = Text.assemble(" ", ("− left", assert_diff.LEFT), "  ", ("+ right", assert_diff.RIGHT), " ")
                 self.console.print(render.GlowPanel(failure.diff.render(), render.GRADIENTS["glow"], title))
+            if same:
+                self._print_same(same)
             for name, content in report.sections:
                 if not content.strip():
                     continue
@@ -717,6 +739,14 @@ class GlowReporter(TerminalReporter):
                         padding=(0, 1),
                     )
                 )
+
+    def _print_same(self, same: list) -> None:
+        noun = "test" if len(same) == 1 else "tests"
+        self.console.print(Text.assemble(("  ⧉ ", "bold red"), (f"the same failure in {len(same)} more {noun}", "red")))
+        for failure in same[:MAX_GROUPED_IDS]:
+            self.console.print(Text.assemble("    ", render.nodeid_text(failure.report.nodeid)))
+        if len(same) > MAX_GROUPED_IDS:
+            self.console.print(Text(f"    … and {len(same) - MAX_GROUPED_IDS} more", style="dim"))
 
     def _crash(self, failure: Failure) -> str:
         if failure.diff is not None and failure.diff.summary:
@@ -1174,19 +1204,18 @@ class GlowReporter(TerminalReporter):
 
         self.console.print()
         if self._failures and not getattr(self, "no_summary", False):
-            for failure in self._failures[:15]:
+            groups = group_failures(self._failures)
+            for failure, *same in groups[:15]:
                 report = failure.report
                 where = "" if report.when == "call" else f" ({report.when})"
-                self._print(
-                    Text.assemble(
-                        ("  ✗ ", "bold red"),
-                        render.nodeid_text(report.nodeid),
-                        (where, "red"),
-                        ("  " + self._crash(failure), "dim"),
-                    )
-                )
-            if len(self._failures) > 15:
-                self._print(Text(f"    … and {len(self._failures) - 15} more", style="dim"))
+                line = Text.assemble(("  ✗ ", "bold red"), render.nodeid_text(report.nodeid), (where, "red"))
+                if same:  # before the message, which may get cut at the edge
+                    line.append(f"  +{len(same)} more like this", style="bold red")
+                line.append("  " + self._crash(failure), style="dim")
+                self._print(line)
+            if len(groups) > 15:
+                rest = sum(map(len, groups[15:]))
+                self._print(Text(f"    … and {rest} more", style="dim"))
             rerun = self._rerun_command()
             if rerun:
                 self._print(Text.assemble(("  ↻ rerun  ", "bold cyan"), (rerun, "cyan")))
