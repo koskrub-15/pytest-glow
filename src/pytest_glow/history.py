@@ -39,6 +39,9 @@ class History:
         self.runs: list[dict] = list(data.get("runs", []))
         self.tests: dict[str, dict] = dict(data.get("tests", {}))
         self.coverage: dict[str, float] = dict(data.get("coverage", {}))
+        self.best: dict[str, float] = dict(data.get("best", {}))  # fastest green run, by number of tests
+        self.achievements: dict[str, int] = dict(data.get("achievements", {}))  # key -> when unlocked
+        self.greens: int = int(data.get("greens", 0))  # green runs in a row, beyond the runs kept
 
     @property
     def enabled(self) -> bool:
@@ -50,6 +53,16 @@ class History:
     def last_outcome(self, nodeid: str) -> str | None:
         o = self.outcomes(nodeid)
         return o[-1] if o else None
+
+    def durations(self, nodeid: str) -> list[float]:
+        return list(self.tests.get(nodeid, {}).get("d", []))
+
+    def failing_streak(self, nodeid: str) -> int:
+        o = self.outcomes(nodeid)
+        return len(o) - len(o.rstrip("FE"))
+
+    def personal_best(self, n_tests: int) -> float | None:
+        return self.best.get(str(n_tests))
 
     def median_duration(self, nodeid: str) -> float | None:
         d = self.tests.get(nodeid, {}).get("d", [])
@@ -93,6 +106,10 @@ class History:
         while len(self.tests) > MAX_TESTS:
             self.tests.pop(next(iter(self.tests)))
         run = {"t": round(time.time()), "d": round(duration, 3), "n": len(results), "f": failed, "ok": ok}
+        self.greens = self.greens + 1 if ok else 0
+        if ok:
+            key = str(len(results))
+            self.best[key] = round(min(duration, self.best.get(key, duration)), 3)
         if coverage is not None:
             run["c"] = round(coverage[0], 3)
             self.coverage.update({path: round(pct, 2) for path, pct in coverage[1].items()})
@@ -103,7 +120,17 @@ class History:
         if self.cache is None:
             return
         with contextlib.suppress(Exception):
-            self.cache.set(KEY, {"runs": self.runs, "tests": self.tests, "coverage": self.coverage})
+            self.cache.set(
+                KEY,
+                {
+                    "runs": self.runs,
+                    "tests": self.tests,
+                    "coverage": self.coverage,
+                    "best": self.best,
+                    "achievements": self.achievements,
+                    "greens": self.greens,
+                },
+            )
 
 
 def is_flaky(outcomes: str) -> bool:

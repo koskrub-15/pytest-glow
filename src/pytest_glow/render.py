@@ -103,11 +103,14 @@ def counts_text(counts: Counter, *, compact: bool = True, extra: dict[str, int] 
     for name, (n, st) in (extra or {}).items():
         if n:
             parts.append(Text.assemble((str(n), f"bold {st}"), (f" {label(name, n)}", "dim")))
-    return Text(" " if compact else " · ", style="dim").join(parts)
+    return join(parts, Text(" " if compact else " · ", style="dim"))
 
 
-def strip(categories: list[str], total: int, width: int) -> Text:
-    """A segmented bar, one cell per test (or per bucket of tests when there are many)."""
+def strip(categories: list[str], total: int, width: int, ages: list[float] | None = None) -> Text:
+    """A segmented bar, one cell per test (or per bucket of tests when there are many).
+
+    With ``ages`` (seconds since each test finished), fresh cells flash white and fade into their colour.
+    """
     total = max(total, len(categories), 1)
     cells = min(total, width)
     text = Text()
@@ -115,9 +118,14 @@ def strip(categories: list[str], total: int, width: int) -> Text:
         lo, hi = i * total // cells, max((i + 1) * total // cells, i * total // cells + 1)
         bucket = categories[lo:hi]
         if not bucket:
-            text.append("━", style="grey30")
+            text.append("━", style=_TRACK)
         else:
-            text.append("━", style=style(worst(bucket)))
+            cat = worst(bucket)
+            age = min(ages[lo:hi]) if ages and ages[lo:hi] else FLASH
+            if age < FLASH and cat in HEX:
+                text.append("━", style=f"bold {blend(HEX[cat], _WHITE, 1 - age / FLASH)}")
+            else:
+                text.append("━", style=HEX.get(cat, style(cat)))
     text.pad_right(width - cells)
     return text
 
@@ -137,7 +145,7 @@ def proportion_bar(counts: Counter, width: int) -> Text:
         c = max((c for c in cats if sizes[c] > 1), key=lambda c: sizes[c] - exact[c])
         sizes[c] -= 1
     for c in cats:
-        text.append("━" * sizes[c], style=style(c))
+        text.append("━" * sizes[c], style=HEX.get(c, style(c)))
     return text
 
 
@@ -247,3 +255,216 @@ def rich_traceback(excinfo, width: int):
         suppress=[_pytest, pluggy],
         max_frames=8,
     )
+
+
+# -- glow effects: truecolor gradients (rich downgrades them on 256/16-colour terminals) --
+
+GRADIENTS: dict[str, tuple[str, ...]] = {
+    "glow": ("#ff4fd8", "#a855f7", "#22d3ee"),
+    "green": ("#16a34a", "#22c55e", "#a3e635"),
+    "red": ("#dc2626", "#f43f5e", "#fb923c"),
+    "yellow": ("#ca8a04", "#eab308", "#fb923c"),
+    "cyan": ("#0891b2", "#22d3ee", "#a5f3fc"),
+    "grey50": ("#4b5563", "#9ca3af"),
+}
+HEX = {
+    "passed": "#22c55e",
+    "failed": "#ef4444",
+    "error": "#ef4444",
+    "skipped": "#eab308",
+    "xfailed": "#d946ef",
+    "xpassed": "#eab308",
+    "rerun": "#eab308",
+}
+_WHITE = (255, 255, 255)
+_TRACK = "#3b3b4a"
+FLASH = 0.6  # seconds a freshly finished test glows in the live strip
+
+
+def _rgb(color: str) -> tuple[int, int, int]:
+    return tuple(int(color[i : i + 2], 16) for i in (1, 3, 5))  # type: ignore[return-value]
+
+
+def _hex(rgb: tuple[float, ...]) -> str:
+    return "#" + "".join(f"{max(0, min(255, round(c))):02x}" for c in rgb)
+
+
+def blend(a: str, b: str | tuple[int, int, int], t: float) -> str:
+    ra, rb = _rgb(a), (_rgb(b) if isinstance(b, str) else b)
+    t = max(0.0, min(1.0, t))
+    return _hex(tuple(x + (y - x) * t for x, y in zip(ra, rb, strict=True)))
+
+
+def gradient_at(stops: tuple[str, ...], t: float) -> str:
+    if len(stops) == 1:
+        return stops[0]
+    t = max(0.0, min(1.0, t)) * (len(stops) - 1)
+    i = min(int(t), len(stops) - 2)
+    return blend(stops[i], stops[i + 1], t - i)
+
+
+def gradient_text(text: str, stops: tuple[str, ...], style: str = "bold", *, background: bool = False) -> Text:
+    out = Text()
+    n = max(len(text) - 1, 1)
+    for i, ch in enumerate(text):
+        color = gradient_at(stops, i / n)
+        out.append(ch, style=f"{style} #0b0b10 on {color}" if background else f"{style} {color}")
+    return out
+
+
+def join(parts: list[Text], sep: Text) -> Text:
+    """Text.join gives the result the separator's style; this keeps every part's own."""
+    out = Text()
+    for i, part in enumerate(parts):
+        if i:
+            out.append_text(sep)
+        out.append_text(part)
+    return out
+
+
+def glow_bar(completed: float, total: float, width: int, stops: tuple[str, ...], now: float | None = None) -> Text:
+    """A gradient bar; given a clock, a highlight sweeps along the filled part."""
+    width = max(width, 1)
+    cells = width * min(max(completed / total, 0.0), 1.0) if total else 0.0
+    full = int(cells)
+    half = cells - full >= 0.5 and full < width
+    center = None
+    if now is not None and full:
+        span = full + 16
+        center = (now * 45) % span - 8
+    text = Text()
+    for i in range(full):
+        color = gradient_at(stops, i / max(width - 1, 1))
+        if center is not None and abs(i - center) < 6:
+            color = blend(color, _WHITE, (1 - abs(i - center) / 6) * 0.65)
+        text.append("━", style=color)
+    if half:
+        text.append("╸", style=gradient_at(stops, full / max(width - 1, 1)))
+    rest = width - full - (1 if half else 0)
+    if rest:
+        text.append(("╺" if half else "━") + "━" * (rest - 1), style=_TRACK)
+    return text
+
+
+class GlowBar:
+    """glow_bar as a renderable that fills whatever width a table column gives it."""
+
+    def __init__(self, completed: float, total: float, stops: tuple[str, ...], now: float | None = None) -> None:
+        self.completed, self.total, self.stops, self.now = completed, total, stops, now
+
+    def __rich_measure__(self, console, options):
+        from rich.measure import Measurement
+
+        return Measurement(4, options.max_width)
+
+    def __rich_console__(self, console, options):
+        yield glow_bar(self.completed, self.total, options.max_width, self.stops, self.now)
+
+
+def fade_rule(title: str, stops: tuple[str, ...], width: int) -> Text:
+    """A section heading: a gradient title and a line that fades into the background."""
+    head = Text("▍", style=stops[0]) + gradient_text(f" {title} ", stops)
+    rest = max(width - len(head), 0)
+    for i in range(rest):
+        head.append("─", style=blend(stops[-1], _TRACK, i / max(rest - 1, 1)))
+    return head
+
+
+class GlowPanel:
+    """A rounded panel whose border is a diagonal gradient, with an optional title on the top edge."""
+
+    def __init__(self, body, stops: tuple[str, ...], title: Text | None = None) -> None:
+        self.body, self.stops, self.title = body, stops, title
+
+    def __rich_console__(self, console, options):
+        from rich.segment import Segment
+        from rich.style import Style
+
+        width = options.max_width
+        lines = console.render_lines(self.body, options.update_width(max(width - 4, 1)), pad=True)
+        height = len(lines) + 2
+
+        def color(x: int, y: int) -> Style:
+            return Style.parse(gradient_at(self.stops, 0.75 * x / max(width - 1, 1) + 0.25 * y / max(height - 1, 1)))
+
+        def edge(left: str, right: str, y: int) -> Text:
+            text = Text()
+            text.append(left, style=color(0, y))
+            for x in range(1, width - 1):
+                text.append("─", style=color(x, y))
+            text.append(right, style=color(width - 1, y))
+            return text
+
+        top = edge("╭", "╮", 0)
+        if self.title is not None and len(self.title) < width - 6:
+            start = width - len(self.title) - 3
+            top = top[:start] + self.title + top[start + len(self.title) :]
+        yield top
+        for y, line in enumerate(lines, start=1):
+            yield Segment("│ ", color(0, y))
+            yield from line
+            yield Segment(" │", color(width - 1, y))
+            yield Segment.line()
+        yield edge("╰", "╯", height - 1)
+
+
+def spark(values: list[float], stops: tuple[str, ...]) -> Text:
+    """A sparkline of plain values; the last (current) one is drawn bold."""
+    text = Text()
+    if not values:
+        return text
+    lo, hi = min(values), max(values)
+    for i, v in enumerate(values):
+        t = (v - lo) / (hi - lo) if hi > lo else 0.5
+        st = gradient_at(stops, t)
+        text.append(SPARKS[round(t * (len(SPARKS) - 1))], style=f"bold {st}" if i == len(values) - 1 else st)
+    return text
+
+
+CONFETTI = "✦✧•*·+°"
+
+
+class Confetti:
+    """A few bursts of particles thrown up from below, falling back under gravity."""
+
+    def __init__(self, width: int, height: int = 6, seed: int | None = None) -> None:
+        import random
+
+        rnd = random.Random(seed)
+        self.width, self.height = width, height
+        colors = [*GRADIENTS["glow"], *GRADIENTS["green"], "#facc15", "#fb923c"]
+        self.particles = []
+        for burst in range(4):
+            x0 = rnd.uniform(0.15, 0.85) * width
+            delay = burst * 0.12
+            for _ in range(18):
+                self.particles.append(
+                    (
+                        x0,
+                        delay,
+                        rnd.uniform(-28, 28),  # sideways speed, cells/s
+                        rnd.uniform(14, 24),  # upward speed, rows/s
+                        rnd.choice(CONFETTI),
+                        rnd.choice(colors),
+                    )
+                )
+
+    def frame(self, t: float) -> Text:
+        grid: dict[tuple[int, int], tuple[str, str]] = {}
+        for x0, delay, vx, vy, ch, color in self.particles:
+            age = t - delay
+            if age < 0:
+                continue
+            x = round(x0 + vx * age)
+            y = round(self.height - (vy * age - 30 * age * age))  # rows from the top
+            if 0 <= x < self.width and 0 <= y < self.height:
+                fade = min(max((age - 0.5) / 0.5, 0.0), 1.0)
+                grid[(y, x)] = (ch, blend(color, "#3b3b4a", fade))
+        text = Text()
+        for y in range(self.height):
+            for x in range(self.width):
+                ch, color = grid.get((y, x), (" ", ""))
+                text.append(ch, style=color)
+            if y < self.height - 1:
+                text.append("\n")
+        return text

@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+- Truecolor gradients throughout; the live bar shimmers and freshly finished tests flash in the file strips.
+- The verdict sweeps in on a terminal; confetti for a new personal best or an achievement.
+- Personal bests per number of tests, and nine achievements unlocked once per project.
+- `git blame` for the failing line under each failure.
+- Duration sparklines in the slowest list.
+- Easter eggs for 67 and 69 passed tests.
+- Fix: the counts in the verdict were drawn dimmed.
+
 ## [0.1.0]
 
 First release.
