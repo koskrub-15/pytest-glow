@@ -3,7 +3,7 @@
 A live, [rich](https://github.com/Textualize/rich)-powered reporter for pytest. Same tests, same
 flags, same exit codes. You just get to watch them run instead of reading a row of dots.
 
-![pytest-glow running a test suite as a boss fight: live file bars, failures as they happen, a combo, and the verdict](https://github.com/koskrub-15/pytest-glow/raw/main/docs/demo.gif)
+![pytest-glow on a red run: live file bars, failures as they happen, grouped failures, slowest tests and fixtures, and the verdict](https://github.com/koskrub-15/pytest-glow/raw/main/docs/demo.gif)
 
 ## What you get
 
@@ -58,6 +58,10 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 - `--glow-sound`: 8-bit sounds, synthesized on the fly (nothing to license): a power-up at combo 10, 25, 50,
   100…, a slide down on a COMBO BREAKER, hits and crits on the boss, then a level-clear jingle, an air horn for
   a record, or the sad trombone. Hear them all with `python -m pytest_glow.sound`
+
+![--glow-boss on a green run: the boss gets enraged, makes its last stand and falls, drops loot, and you level up](https://github.com/koskrub-15/pytest-glow/raw/main/docs/demo-boss.gif)
+
+![a green run: combo, a green streak and XP](https://github.com/koskrub-15/pytest-glow/raw/main/docs/demo-green.gif)
 
 ![the end of a run up close: a rich traceback, coverage and the verdict](https://github.com/koskrub-15/pytest-glow/raw/main/docs/screenshot.svg)
 
