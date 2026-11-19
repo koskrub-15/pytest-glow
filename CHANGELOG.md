@@ -12,6 +12,8 @@ All notable changes to this project are documented here. The format follows
 - `git blame` for the failing line under each failure.
 - Duration sparklines in the slowest list.
 - Easter eggs for 67 and 69 passed tests.
+- Diffs for failed `==` assertions (dicts, lists, sets, strings, numbers, dataclasses, namedtuples), and
+  failure one-liners that name the first difference.
 - Fix: the counts in the verdict were drawn dimmed.
 
 ## [0.1.0]

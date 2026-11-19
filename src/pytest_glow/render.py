@@ -226,8 +226,11 @@ def shorten_paths(traceback, root: str) -> None:
                 frame.filename = os.path.relpath(frame.filename, root)
 
 
-def rich_traceback(excinfo, width: int):
-    """A rich traceback with pytest/pluggy frames trimmed and assertion temporaries hidden."""
+def rich_traceback(excinfo, width: int, *, brief: bool = False):
+    """A rich traceback with pytest/pluggy frames trimmed and assertion temporaries hidden.
+
+    ``brief`` keeps only the first line of the error, for when a diff explains the rest.
+    """
     import _pytest
     import pluggy
     from rich.traceback import Traceback
@@ -240,6 +243,8 @@ def rich_traceback(excinfo, width: int):
     )
     for stack in trace.stacks:
         stack.exc_value = plain(stack.exc_value)
+    if brief and trace.stacks:
+        trace.stacks[0].exc_value = trace.stacks[0].exc_value.split("\n", 1)[0]
         for frame in stack.frames:
             if frame.locals:
                 frame.locals = {k: v for k, v in frame.locals.items() if not k.startswith("@")}
