@@ -23,7 +23,7 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, render, share, sound
+from . import __version__, hang, render, share, sound
 from . import achievements as ach
 from . import coverage as cov
 from . import diff as assert_diff
@@ -259,6 +259,7 @@ class GlowReporter(TerminalReporter):
 
     def pytest_sessionstart(self, session: pytest.Session) -> None:
         self._session = session
+        self._main_thread = threading.get_ident()  # where the tests run, unless xdist runs them elsewhere
         try:
             from _pytest import timing
 
@@ -599,6 +600,12 @@ class GlowReporter(TerminalReporter):
                     else render.linked(Text(render.test_name(nodeid)), self._test_url(nodeid))
                 )
                 parts.append(Text.assemble("     ", ("↳ ", "dim"), name, ("  ⏱ " + render.fmt_clock(elapsed), st)))
+                if elapsed >= hang.HANG and not self._workers:
+                    where = self._where_stuck()
+                    if where is not None:
+                        line = Text("       ") + where
+                        line.no_wrap, line.overflow = True, "ellipsis"
+                        parts.append(line)
 
             total = max(self._total, self._done, 1)
             elapsed = now - self._t_run
@@ -1007,6 +1014,15 @@ class GlowReporter(TerminalReporter):
             )
         if len(slower) > 5:
             self._print(Text(f"     … and {len(slower) - 5} more slower than usual", style="dim"))
+
+    def _where_stuck(self) -> Text | None:
+        frame = hang.thread_frame(getattr(self, "_main_thread", None))
+        spots = hang.stuck_at(frame, str(self.config.rootpath))
+        mine = spots[0]
+        where = hang.describe(spots, str(self.config.invocation_params.dir))
+        if where is not None and mine is not None:
+            render.linked(where, self._url(mine.path, mine.line))
+        return where
 
     def _hits(self) -> int:
         return sum(n for c, n in self._counts.items() if c not in render.FAILING)

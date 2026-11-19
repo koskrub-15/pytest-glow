@@ -292,3 +292,55 @@ def test_link_template(monkeypatch):
     assert link_template() == "pycharm://open?file={path}&line={line}"
     monkeypatch.setenv("PYTEST_GLOW_LINK", "off")
     assert link_template() is None
+
+
+def _blocked_thread(tmp_path):
+    """A thread parked inside a function from a file under tmp_path, which calls into the stdlib."""
+    import importlib.util
+    import threading
+
+    (tmp_path / "slow_mod.py").write_text(
+        "import queue\n\ndef fetch(q, ready):\n    ready.set()\n    return q.get()  # parked here\n"
+    )
+    spec = importlib.util.spec_from_file_location("slow_mod", tmp_path / "slow_mod.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    import queue
+
+    q, ready = queue.Queue(), threading.Event()
+    thread = threading.Thread(target=module.fetch, args=(q, ready), daemon=True)
+    thread.start()
+    ready.wait()
+    return thread, q
+
+
+def test_where_a_hanging_test_is(tmp_path):
+    import time
+
+    from pytest_glow import hang
+
+    thread, q = _blocked_thread(tmp_path)
+    try:
+        time.sleep(0.05)
+        mine, deeper = hang.stuck_at(hang.thread_frame(thread.ident), str(tmp_path))
+        assert (mine.path, mine.line, mine.function) == (str(tmp_path / "slow_mod.py"), 5, "fetch")
+        assert mine.source == "return q.get()  # parked here"
+        assert deeper is not None and deeper.path.endswith("threading.py")  # queue.get waits on a lock
+        text = hang.describe((mine, deeper), str(tmp_path)).plain
+        assert text.startswith("⏳ slow_mod.py:5 fetch  return q.get()")
+        assert "→ threading.py:" in text
+    finally:
+        q.put(None)
+        thread.join()
+
+
+def test_short_paths():
+    import os
+
+    from pytest_glow.hang import short_path
+
+    here = os.sep + os.path.join("home", "me", "app")
+    assert short_path(os.path.join(here, "tests", "t.py"), here) == os.path.join("tests", "t.py")
+    site = os.path.join(os.sep, "venv", "lib", "site-packages", "requests", "api.py")
+    assert short_path(site, here) == "requests/api.py"
+    assert short_path(os.path.join(os.sep, "usr", "lib", "python3", "socket.py"), here) == "socket.py"
