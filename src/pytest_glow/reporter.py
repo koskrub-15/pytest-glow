@@ -27,7 +27,7 @@ from . import achievements as ach
 from . import coverage as cov
 from . import diff as assert_diff
 from .blame import ago, blame, changed_since, describe, head
-from .boss import Fight, arena, outcome
+from .boss import HEARTS, Fight, arena, outcome
 from .history import History, is_flaky
 from .plugin import flag
 
@@ -143,7 +143,8 @@ class GlowReporter(TerminalReporter):
         self._oldest_blame: float | None = None
         self._fight = Fight.for_project(config.rootpath.name) if flag(config, "boss") else None
         self._last_hit: float | None = None
-        self._sound = flag(config, "sound")
+        # sound only in an interactive terminal: never in CI or a pipe
+        self._player = sound.Player(self.console.file) if flag(config, "sound") and self._live_enabled else None
         self._share: str | None = config.getoption("glow_share", None)
         # under xdist: what each worker is running, and how many tests it has finished
         self._worker_now: dict[str, tuple[str, float]] = {}
@@ -442,19 +443,24 @@ class GlowReporter(TerminalReporter):
             fs.finished_at.append(now)
             if ts.outcome not in render.FAILING:
                 self._last_hit = now
+            broke = None
             if ts.outcome == "passed":
                 self._combo += 1
                 self._max_combo = max(self._max_combo, self._combo)
             elif ts.outcome in render.FAILING:
                 if self._combo >= COMBO_SHOWN:
                     self._combo_broken = (self._combo, now)
+                    broke = self._combo
                 self._combo = 0
+            combo = self._combo
             fs.counts[ts.outcome] += 1
             fs.duration += ts.duration
             fs.total = max(fs.total, fs.done)
             file_done = fs.done >= fs.total and not fs.flushed
             if file_done:
                 fs.flushed = True
+        if self._player is not None:
+            self._sound_for(ts.outcome, combo, broke)
         if self._verbose > 0:
             self._print(
                 Text.assemble(
@@ -467,6 +473,18 @@ class GlowReporter(TerminalReporter):
             )
         if file_done and self._verbose >= 0:
             self._print(self._file_line(fs))
+
+    def _sound_for(self, outcome: str, combo: int, broke: int | None) -> None:
+        player = self._player
+        level = sound.milestone(combo) if outcome == "passed" else None
+        if level is not None:
+            player.play(f"combo{level}")
+        elif outcome in render.FAILING and self._fight is not None:
+            player.play("hurt")
+        elif broke:
+            player.play("combo_breaker")
+        elif self._fight is not None:
+            player.hit(crit=combo >= COMBO_SHOWN)
 
     def _file_line(self, fs: FileState, now: float | None = None) -> Text:
         live = now is not None
@@ -1205,9 +1223,20 @@ class GlowReporter(TerminalReporter):
         self.console.print(panel())
         if self._share:
             self._save_card(icon, word, stops, counts, lines[1:])
-        if self._sound and self._live_enabled and self._done:
-            kind = "fanfare" if (self._new_pb or self._unlocked) and not failing else "red" if failing else "green"
-            sound.play(kind, self.console.file)
+        if self._player is not None and self._done:
+            self._player.play(self._final_sound(failing, exitstatus), bell=True)
+
+    def _final_sound(self, failing: int, exitstatus: int) -> str:
+        if exitstatus == pytest.ExitCode.INTERRUPTED:
+            return "sad_trombone"
+        if self._fight is not None:
+            if failing >= HEARTS:
+                return "game_over"
+            if not failing:
+                return "boss_down"
+        if failing:
+            return "sad_trombone"
+        return "airhorn" if self._new_pb or self._unlocked else "level_clear"
 
     def _save_card(self, icon: str, word: str, stops: tuple, counts: Counter, details: list) -> None:
         card = share.Card(

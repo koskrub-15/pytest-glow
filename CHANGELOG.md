@@ -10,7 +10,8 @@ All notable changes to this project are documented here. The format follows
 - The verdict sweeps in on a terminal; confetti for a new personal best or an achievement.
 - Personal bests per number of tests, and fourteen achievements unlocked once per project.
 - `--glow-boss`: the run as a boss fight against the project's nemesis.
-- `--glow-share` saves the run as an SVG card; `--glow-sound` plays a sound when it ends.
+- `--glow-share` saves the run as an SVG card.
+- `--glow-sound`: synthesized 8-bit sounds for combo milestones, combo breakers, boss hits and the end of the run.
 - Under xdist, a live line per worker with the test it's running.
 - Live combo counter for passes in a row, and the max combo in the verdict.
 - A ready-to-paste command to rerun the failures.

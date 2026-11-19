@@ -43,7 +43,9 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 - `--glow-boss`: the suite is a boss fight. Every test that doesn't fail is a hit on your project's nemesis
   (the same boss every time), every failure costs you one of three hearts
 - `--glow-share`: the run as an SVG card, ready to post
-- `--glow-sound`: a sound at the end of the run, so you can look away while it works
+- `--glow-sound`: 8-bit sounds, synthesized on the fly (nothing to license): a power-up at combo 10, 25, 50,
+  100…, a slide down on a COMBO BREAKER, hits and crits on the boss, then a level-clear jingle, an air horn for
+  a record, or the sad trombone. Hear them all with `python -m pytest_glow.sound`
 
 **Coverage**: with `pytest-cov` installed, its plain table is replaced by a bar per file, the missing line
 ranges, per-file gains and drops since the last run, and the total plus `--cov-fail-under` in the verdict.
@@ -72,7 +74,7 @@ Just run `pytest`. Everything else is optional:
 | `--no-glow` or `PYTEST_GLOW=0` | use pytest's standard output |
 | `--glow` or `PYTEST_GLOW=1` | force it on, even without a terminal (no animation then) |
 | `--glow-boss` or `PYTEST_GLOW_BOSS=1` | fight the suite as a boss; `glow_boss = true` in the ini to keep it on |
-| `--glow-sound` or `PYTEST_GLOW_SOUND=1` | a sound when the run ends (terminal only); `glow_sound = true` in the ini |
+| `--glow-sound` or `PYTEST_GLOW_SOUND=1` | 8-bit sounds for combos, the boss and the end of the run (terminal only); `glow_sound = true` in the ini |
 | `--glow-share[=PATH]` | save the run as an SVG card, `glow-card.svg` by default |
 | `-v` | also list every test as it finishes |
 | `-q` | only failures and the final summary |
