@@ -24,6 +24,7 @@ from rich.text import Text
 from . import __version__, render
 from . import achievements as ach
 from . import coverage as cov
+from . import diff as assert_diff
 from .blame import blame, describe
 from .history import History, is_flaky
 
@@ -68,6 +69,7 @@ class TestState:
 class Failure:
     report: Any
     traceback: Any = None
+    diff: assert_diff.Diff | None = None
 
 
 _WARNING_LOCATION = re.compile(r"^\S+:\d+: ")
@@ -110,6 +112,8 @@ class GlowReporter(TerminalReporter):
         self._counts: Counter = Counter()
         self._failures: list[Failure] = []
         self._tracebacks: dict[tuple[str, str], Any] = {}
+        self._compare: tuple[Any, Any] | None = None  # operands of the last failed `==` assertion
+        self._diffs: dict[tuple[str, str], assert_diff.Diff] = {}
         self._collect_errors: list[Any] = []
         self._workers: set[str] = set()
         self._status = ""
@@ -322,6 +326,7 @@ class GlowReporter(TerminalReporter):
 
     def pytest_runtest_logstart(self, nodeid: str, location: tuple) -> None:
         now = time.monotonic()
+        self._compare = None
         with self._lock:
             if self._t_run is None:
                 self._t_run = now
@@ -334,10 +339,28 @@ class GlowReporter(TerminalReporter):
     @pytest.hookimpl(wrapper=True)
     def pytest_runtest_makereport(self, item: pytest.Item, call: pytest.CallInfo):
         report = yield
-        if report.failed and call.excinfo is not None and self._tbstyle in ("auto", "long"):
+        compare, self._compare = self._compare, None
+        if not report.failed or call.excinfo is None:
+            return report
+        key = (report.nodeid, report.when)
+        error = call.excinfo.value
+        # a `==` caught earlier in the test (pytest.raises) mustn't be blamed for a later, different assert
+        if compare is not None and isinstance(error, AssertionError) and " == " in str(error).split("\n", 1)[0]:
+            # diffed now, while the operands are as the assertion saw them
+            found = assert_diff.explain(*compare)
+            if found is not None:
+                self._diffs[key] = found
+        if self._tbstyle in ("auto", "long"):
             with contextlib.suppress(Exception):
-                self._tracebacks[(report.nodeid, report.when)] = render.rich_traceback(call.excinfo, self.console.width)
+                self._tracebacks[key] = render.rich_traceback(
+                    call.excinfo, self.console.width, brief=key in self._diffs
+                )
         return report
+
+    def pytest_assertrepr_compare(self, config: pytest.Config, op: str, left: Any, right: Any) -> None:
+        # Only remembered: pytest still writes its own explanation, for --tb=short, xdist and the like.
+        if op == "==":
+            self._compare = (left, right)
 
     def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
         self._tests_ran = True
@@ -349,13 +372,13 @@ class GlowReporter(TerminalReporter):
             if category and ts.outcome not in render.FAILING:
                 ts.outcome = category
             if report.failed:
-                tb = self._tracebacks.pop((report.nodeid, report.when), None)
-                self._failures.append(Failure(report, tb))
+                key = (report.nodeid, report.when)
+                self._failures.append(Failure(report, self._tracebacks.pop(key, None), self._diffs.pop(key, None)))
         if report.failed and self._verbose >= -1:
             line = Text.assemble(("  ✗ ", "bold red"), render.nodeid_text(report.nodeid))
             if report.when != "call":
                 line.append(f" ({report.when})", style="red")
-            line.append("  " + render.crash_message(report), style="dim red")
+            line.append("  " + self._crash(self._failures[-1]), style="dim red")
             self._print(line)
 
     def pytest_runtest_logfinish(self, nodeid: str, location: tuple) -> None:
@@ -595,6 +618,9 @@ class GlowReporter(TerminalReporter):
                 self.console.print(failure.traceback)
             else:
                 self.console.print(Panel(render.longrepr_text(str(report.longreprtext)), border_style="red"))
+            if failure.diff is not None and self._tbstyle in ("auto", "long"):
+                title = Text.assemble(" ", ("− left", assert_diff.LEFT), "  ", ("+ right", assert_diff.RIGHT), " ")
+                self.console.print(render.GlowPanel(failure.diff.render(), render.GRADIENTS["glow"], title))
             for name, content in report.sections:
                 if not content.strip():
                     continue
@@ -610,6 +636,11 @@ class GlowReporter(TerminalReporter):
                         padding=(0, 1),
                     )
                 )
+
+    def _crash(self, failure: Failure) -> str:
+        if failure.diff is not None and failure.diff.summary:
+            return failure.diff.summary
+        return render.crash_message(failure.report)
 
     def _blame(self, report: pytest.TestReport) -> str | None:
         """git blame for the deepest frame of the failure that lives in the project."""
@@ -933,7 +964,7 @@ class GlowReporter(TerminalReporter):
                         ("  ✗ ", "bold red"),
                         render.nodeid_text(report.nodeid),
                         (where, "red"),
-                        ("  " + render.crash_message(report), "dim"),
+                        ("  " + self._crash(failure), "dim"),
                     )
                 )
             if len(self._failures) > 15:
