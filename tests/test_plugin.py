@@ -558,3 +558,39 @@ def test_link_urls(pytester):
     assert f"url=x://{root}/sub%20dir/a.py:3" in out
     assert f"test=x://{root}/test_links.py:3" in out
     assert f"crash=x://{root}/test_links.py:5" in out
+
+
+def test_slowest_fixtures(pytester):
+    pytester.makepyfile(
+        test_fx="""
+        import time
+        import pytest
+
+        @pytest.fixture(scope="session")
+        def db():
+            time.sleep(0.3)
+            yield
+            time.sleep(0.15)
+
+        @pytest.fixture
+        def client(db):
+            time.sleep(0.03)
+
+        @pytest.mark.parametrize("i", range(4))
+        def test_a(client, i):
+            pass
+        """
+    )
+    _, out = run(pytester, "--glow")
+    assert "slowest fixtures" in out
+    db = next(line for line in out.splitlines() if " db " in line)
+    assert "session · setup 3" in db and "teardown 1" in db
+    client = next(line for line in out.splitlines() if " client " in line)
+    assert "×4, 3" in client
+    assert out.index(" db ") < out.index(" client ")
+
+
+def test_no_fixture_section_for_quick_fixtures(pytester):
+    pytester.makepyfile("import pytest\n@pytest.fixture\ndef f(): pass\ndef test_a(f): pass\n")
+    _, out = run(pytester, "--glow")
+    assert "slowest fixtures" not in out

@@ -75,6 +75,17 @@ class TestState:
 
 
 @dataclass
+class FixtureTime:
+    setup: float = 0.0
+    teardown: float = 0.0
+    count: int = 0
+
+    @property
+    def total(self) -> float:
+        return self.setup + self.teardown
+
+
+@dataclass
 class Failure:
     report: Any
     traceback: Any = None
@@ -140,6 +151,7 @@ class GlowReporter(TerminalReporter):
         # clickable paths (OSC 8) only in a real terminal: in logs they'd be noise
         self._link = link_template() if self._live_enabled else None
         self._locations: dict[str, tuple] = {}  # nodeid -> (path from the rootdir, 0-based line)
+        self._fixtures: dict[tuple[str, str], FixtureTime] = {}  # (name, scope) -> time spent in it
         self._live: Live | None = None
         self._lock = threading.RLock()
         self._capture_off = config.getoption("capture", "fd") == "no"
@@ -438,6 +450,28 @@ class GlowReporter(TerminalReporter):
                 )
         return report
 
+    @pytest.hookimpl(wrapper=True)
+    def pytest_fixture_setup(self, fixturedef: Any, request: pytest.FixtureRequest):
+        spent = self._fixtures.setdefault((fixturedef.argname, fixturedef.scope), FixtureTime())
+        started: list[float] = []
+
+        def tearing_down() -> None:
+            started.append(time.perf_counter())
+
+        def torn_down() -> None:
+            if started:
+                spent.teardown += time.perf_counter() - started.pop()
+
+        # finalizers run last-in first-out: these two end up around the fixture's own teardown
+        fixturedef.addfinalizer(torn_down)
+        t0 = time.perf_counter()
+        try:
+            return (yield)
+        finally:
+            spent.setup += time.perf_counter() - t0
+            spent.count += 1
+            fixturedef.addfinalizer(tearing_down)
+
     def pytest_assertrepr_compare(self, config: pytest.Config, op: str, left: Any, right: Any) -> None:
         # Only remembered: pytest still writes its own explanation, for --tb=short, xdist and the like.
         if op == "==":
@@ -697,6 +731,7 @@ class GlowReporter(TerminalReporter):
         self._celebrations(exitstatus)
         if show:
             self._print_slowest()
+            self._print_fixtures()
             self._print_insights()
             self._print_achievements()
             self._print_changes()
@@ -965,6 +1000,34 @@ class GlowReporter(TerminalReporter):
                 compare,
             )
         self.console.print(table)
+
+    def _print_fixtures(self) -> None:
+        ranked = sorted(self._fixtures.items(), key=lambda item: -item[1].total)[:5]
+        if not ranked or ranked[0][1].total < 0.2:
+            return
+        self.console.print()
+        self.console.print(Text("  slowest fixtures", style="bold dim"))
+        ranked = [(key, spent) for key, spent in ranked if spent.total >= 0.05]
+        top = ranked[0][1].total
+        name_width = max(len(name) for (name, _), _ in ranked)
+        for (name, scope), spent in ranked:
+            details = [] if scope == "function" else [scope]
+            if spent.count > 1:
+                details.append(f"×{spent.count}, {render.fmt_dur(spent.total / spent.count)} each")
+            if spent.teardown >= 0.01:
+                details.append(f"setup {render.fmt_dur(spent.setup)}, teardown {render.fmt_dur(spent.teardown)}")
+            share = spent.total / self._duration if self._duration else 0
+            if share >= 0.2:
+                details.append(f"{share:.0%} of the run")
+            st = "bold red" if spent.total >= 5 else "yellow" if spent.total >= 1 else "default"
+            # on a narrow terminal, only the details at the end get cut
+            line = Text.assemble(
+                (f"  {render.fmt_dur(spent.total):>7}  ", st),
+                render.glow_bar(spent.total, top, 12, render.GRADIENTS["glow"]),
+                (f"  {name:<{name_width}}  ", "bold"),
+                (" · ".join(details), "dim"),
+            )
+            self._print(line)
 
     def _print_insights(self) -> None:
         if not self._history.enabled:
