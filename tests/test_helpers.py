@@ -136,6 +136,7 @@ def facts(**kw):
         ({"ok": False, "oldest_blame": 6 * 365 * 86400}, "archaeologist"),
         ({"ok": False, "coverage_total": 100.0}, "glass_cannon"),
         ({"max_combo": 100}, "unstoppable"),
+        ({"boss_slain": True}, "boss_slayer"),
     ],
 )
 def test_achievements(kw, key):
@@ -186,3 +187,94 @@ def test_personal_best_only_counts_green_runs_of_the_same_size():
 def test_combos_heat_up():
     assert render.combo_stops(10) == render.GRADIENTS["cyan"]
     assert render.combo_stops(150) == render.GRADIENTS["fire"]
+
+
+def test_every_project_meets_the_same_boss():
+    from pytest_glow.boss import BOSSES, Fight
+
+    first = Fight.for_project("my-app")
+    assert first.name in BOSSES
+    assert Fight.for_project("my-app").name == first.name
+    assert len({Fight.for_project(f"p{i}").name for i in range(50)}) > 1
+
+
+def test_boss_eyes_weaken():
+    from pytest_glow.boss import Fight
+
+    fight = Fight.for_project("x", hp=10)
+    assert [fight.eyes(left) for left in (10, 4, 1)] == ["●", "◦", "✖"]
+    sprite = fight.sprite_text(1, heat=0).plain
+    assert "✖" in sprite
+    assert len(set(map(len, sprite.split("\n")))) == 1  # rows line up
+
+
+def test_hearts():
+    from pytest_glow.boss import hearts
+
+    assert hearts(0).plain == "❤❤❤"
+    assert hearts(2).plain == "❤♡♡"
+    assert hearts(9).plain == "♡♡♡"
+
+
+def test_sound_falls_back_to_the_bell(monkeypatch, tmp_path):
+    import io
+
+    from pytest_glow import sound
+
+    monkeypatch.setattr(sound, "_cache_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(sound, "_spawn", lambda path: False)
+    out = io.StringIO()
+    player = sound.Player.__new__(sound.Player)
+    player.stream = out
+    player.play("hit")  # mid-run: silence rather than a bell per test
+    assert out.getvalue() == ""
+    player.play("level_clear", bell=True)
+    assert out.getvalue() == "\a"
+
+
+def test_sound_uses_a_player_when_there_is_one(monkeypatch):
+    from pytest_glow import sound
+
+    monkeypatch.setattr(sound.sys, "platform", "linux")
+    monkeypatch.setattr(sound.shutil, "which", lambda name: "/usr/bin/aplay" if name == "aplay" else None)
+    assert sound.command("x.wav") == ["aplay", "-q", "x.wav"]
+    monkeypatch.setattr(sound.shutil, "which", lambda name: "/usr/bin/" + name)
+    assert sound.command("x.wav") == ["pw-play", "x.wav"]
+    monkeypatch.setattr(sound.shutil, "which", lambda name: None)
+    assert sound.command("x.wav") is None
+
+
+@pytest.mark.parametrize("name", ["level_clear", "sad_trombone", "airhorn", "hit", "boss_down", "combo6"])
+def test_sounds_are_valid_wavs_without_clipping(monkeypatch, tmp_path, name):
+    import wave
+
+    from pytest_glow import sound
+
+    monkeypatch.setattr(sound, "_cache_dir", lambda: str(tmp_path))
+    samples = sound.SOUNDS[name]()
+    assert 0.05 < len(samples) / sound.RATE < 3
+    assert max(map(abs, samples)) < 1
+    assert abs(samples[0]) < 0.01  # no click
+    with wave.open(sound.path_for(name)) as w:
+        assert (w.getframerate(), w.getsampwidth(), w.getnchannels()) == (sound.RATE, 2, 1)
+        assert w.getnframes() == len(samples)
+
+
+def test_combo_milestones():
+    from pytest_glow import sound
+
+    assert [sound.milestone(n) for n in (9, 10, 11, 25, 100)] == [None, 0, None, 1, 3]
+    assert f"combo{len(sound.COMBO_MILESTONES) - 1}" in sound.SOUNDS
+
+
+def test_hits_are_throttled(monkeypatch):
+    from pytest_glow import sound
+
+    played = []
+    player = sound.Player.__new__(sound.Player)
+    player._last_hit = 0.0
+    monkeypatch.setattr(player, "play", played.append, raising=False)
+    for _ in range(50):
+        player.hit(crit=False)
+    player.hit(crit=True)
+    assert played == ["hit"]

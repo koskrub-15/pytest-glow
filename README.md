@@ -10,6 +10,7 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 **While the tests run**
 - a line per running file: a spinner, a segmented bar where every test lights up green, red or yellow, counts and a clock
 - the test that's running right now, with a ticking timer once it gets slow (hangs are easy to spot)
+- under pytest-xdist, a line per worker: what it's running, for how long, and how many tests it has done
 - an overall progress bar with an ETA, which turns red the moment something fails
 - failures as one-liners as soon as they happen, so you don't wait for the end of the run to see them
 - a combo counter for passes in a row, heating up as it grows, and a COMBO BREAKER when one fails
@@ -33,11 +34,18 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 **Pure showing off** (all of it remembered in `.pytest_cache` too)
 - personal bests: the fastest green run for a given number of tests, `🏆 new PB` when you beat it
 - achievements, each unlocked once per project: First Blood, Phoenix, Night Owl, Minimalist, Sniper,
-  Speedrunner, Surgeon, Clean Sweep, Centurion, Friday Deploy, Archaeologist, Glass Cannon, Unstoppable
+  Speedrunner, Surgeon, Clean Sweep, Centurion, Friday Deploy, Archaeologist, Glass Cannon, Unstoppable,
+  Boss Slayer
 - a burst of confetti over the verdict when you set a record or unlock something (never in CI or pipes)
 - under each failure, who last touched the failing line and when, from `git blame`
 - a duration sparkline next to each of the slowest tests, so you see the ones getting slower
 - certain pass counts are acknowledged
+- `--glow-boss`: the suite is a boss fight. Every test that doesn't fail is a hit on your project's nemesis
+  (the same boss every time), every failure costs you one of three hearts
+- `--glow-share`: the run as an SVG card, ready to post
+- `--glow-sound`: 8-bit sounds, synthesized on the fly (nothing to license): a power-up at combo 10, 25, 50,
+  100…, a slide down on a COMBO BREAKER, hits and crits on the boss, then a level-clear jingle, an air horn for
+  a record, or the sad trombone. Hear them all with `python -m pytest_glow.sound`
 
 **Coverage**: with `pytest-cov` installed, its plain table is replaced by a bar per file, the missing line
 ranges, per-file gains and drops since the last run, and the total plus `--cov-fail-under` in the verdict.
@@ -65,6 +73,9 @@ Just run `pytest`. Everything else is optional:
 |---|---|
 | `--no-glow` or `PYTEST_GLOW=0` | use pytest's standard output |
 | `--glow` or `PYTEST_GLOW=1` | force it on, even without a terminal (no animation then) |
+| `--glow-boss` or `PYTEST_GLOW_BOSS=1` | fight the suite as a boss; `glow_boss = true` in the ini to keep it on |
+| `--glow-sound` or `PYTEST_GLOW_SOUND=1` | 8-bit sounds for combos, the boss and the end of the run (terminal only); `glow_sound = true` in the ini |
+| `--glow-share[=PATH]` | save the run as an SVG card, `glow-card.svg` by default |
 | `-v` | also list every test as it finishes |
 | `-q` | only failures and the final summary |
 | `--tb=short/line/native` | pytest's own traceback text instead of rich tracebacks; `--tb=no` hides them |

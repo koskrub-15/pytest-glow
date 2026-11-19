@@ -35,6 +35,43 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="use the glow reporter even when stdout is not a terminal",
     )
     group.addoption("--no-glow", action="store_false", dest="glow", help="use pytest's standard reporter")
+    group.addoption(
+        "--glow-boss",
+        action="store_true",
+        default=None,
+        help="fight the test suite as a boss (also PYTEST_GLOW_BOSS=1 or glow_boss = true in the ini)",
+    )
+    group.addoption(
+        "--glow-sound",
+        action="store_true",
+        default=None,
+        help="play a sound when the run ends (also PYTEST_GLOW_SOUND=1 or glow_sound = true in the ini)",
+    )
+    group.addoption(
+        "--glow-share",
+        nargs="?",
+        const="glow-card.svg",
+        default=None,
+        metavar="PATH",
+        help="save the run as an SVG card to share (default: glow-card.svg); implies --glow",
+    )
+    parser.addini("glow_boss", "fight the test suite as a boss", type="bool", default=False)
+    parser.addini("glow_sound", "play a sound when the run ends", type="bool", default=False)
+
+
+_TRUE = ("1", "true", "yes", "on")
+
+
+def flag(config: pytest.Config, name: str) -> bool:
+    """An opt-in mode, from the command line, the environment or the ini file."""
+    if config.getoption(f"glow_{name}", None):
+        return True
+    if os.environ.get(f"PYTEST_GLOW_{name.upper()}", "").strip().lower() in _TRUE:
+        return True
+    try:
+        return bool(config.getini(f"glow_{name}"))
+    except ValueError:
+        return False
 
 
 def _wanted(config: pytest.Config) -> bool | None:
@@ -42,10 +79,12 @@ def _wanted(config: pytest.Config) -> bool | None:
     option = config.getoption("glow", None)
     if option is not None:
         return option
+    if config.getoption("glow_share", None):
+        return True
     env = os.environ.get("PYTEST_GLOW", "").strip().lower()
     if env in ("0", "false", "no", "off"):
         return False
-    if env in ("1", "true", "yes", "on"):
+    if env in _TRUE:
         return True
     return None
 
@@ -79,6 +118,9 @@ def _terminal_stream(force: bool):
 
 @pytest.hookimpl(trylast=True)
 def pytest_configure(config: pytest.Config) -> None:
+    share = config.getoption("glow_share", None)
+    if share and not share.lower().endswith(".svg"):
+        raise pytest.UsageError(f"--glow-share writes SVG; give it a .svg path, not {share!r}")
     wanted = _wanted(config)
     if wanted is False or not _compatible(config):
         return

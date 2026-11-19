@@ -438,3 +438,72 @@ def test_max_combo_in_the_verdict(pytester):
     )
     _, out = run(pytester, "--glow")
     assert "max combo ×30" in out
+
+
+def test_xdist_tracks_what_each_worker_runs(pytester):
+    pytest.importorskip("xdist")
+    pytester.makeconftest("""
+        def pytest_terminal_summary(terminalreporter):
+            done = getattr(terminalreporter, "_worker_done", {})
+            terminalreporter.write_line(f"workers={len(done)} finished={sum(done.values())}")
+    """)
+    pytester.makepyfile("import pytest\n@pytest.mark.parametrize('i', range(8))\ndef test_n(i): pass\n")
+    _, out = run(pytester, "--glow", "-n", "2")
+    assert "workers=2 finished=8" in out
+
+
+def test_boss_fight_victory(pytester):
+    pytester.makepyfile("def test_a(): pass\ndef test_b(): pass\n")
+    _, out = run(pytester, "--glow", "--glow-boss")
+    assert "VICTORY" in out
+    assert "falls · 2 hits in" in out
+
+
+def test_boss_fight_wounds_and_defeat(pytester):
+    pytester.makepyfile("def test_a(): pass\ndef test_b(): assert 0\n")
+    _, out = run(pytester, "--glow", "--glow-boss")
+    assert "survives with 1 HP" in out
+    assert "you have ❤❤♡ left" in out
+    pytester.makepyfile("import pytest\n@pytest.mark.parametrize('i', range(4))\ndef test_b(i): assert 0\n")
+    _, out = run(pytester, "--glow", "--glow-boss")
+    assert "DEFEATED by the" in out
+
+
+def test_boss_from_the_environment_and_ini(pytester, monkeypatch):
+    pytester.makepyfile("def test_a(): pass\n")
+    _, out = run(pytester, "--glow")
+    assert "VICTORY" not in out
+    monkeypatch.setenv("PYTEST_GLOW_BOSS", "1")
+    _, out = run(pytester, "--glow")
+    assert "VICTORY" in out
+    monkeypatch.delenv("PYTEST_GLOW_BOSS")
+    pytester.makeini("[pytest]\nglow_boss = true\n")
+    _, out = run(pytester, "--glow")
+    assert "VICTORY" in out
+
+
+def test_share_saves_a_card(pytester):
+    pytester.makepyfile("def test_a(): pass\ndef test_b(): assert 0\n")
+    # no --glow: --glow-share asks for the glow reporter on its own
+    _, out = run(pytester, "--glow-share")
+    assert "card saved to glow-card.svg" in out
+    svg = (pytester.path / "glow-card.svg").read_text()
+    assert svg.startswith("<svg")
+    assert "passed" in svg and "failed" in svg
+    assert pytester.path.name[:20] in svg
+
+    _, out = run(pytester, "--glow-share=out/card.svg")
+    assert "couldn't save the card" in out
+
+
+def test_share_wants_svg(pytester):
+    pytester.makepyfile("def test_a(): pass\n")
+    result = pytester.runpytest_subprocess("--glow-share=card.png")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    assert "give it a .svg path" in "\n".join(result.errlines)
+
+
+def test_sound_stays_quiet_without_a_terminal(pytester):
+    pytester.makepyfile("def test_a(): pass\n")
+    result = pytester.runpytest_subprocess("--glow", "--glow-sound")
+    assert "\a" not in "\n".join(result.outlines)

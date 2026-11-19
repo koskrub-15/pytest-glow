@@ -22,12 +22,14 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, render
+from . import __version__, render, share, sound
 from . import achievements as ach
 from . import coverage as cov
 from . import diff as assert_diff
 from .blame import ago, blame, changed_since, describe, head
+from .boss import HEARTS, Fight, arena, outcome
 from .history import History, is_flaky
+from .plugin import flag
 
 SUMMARY_EXIT_CODES = (
     pytest.ExitCode.OK,
@@ -43,6 +45,7 @@ REVEAL = 0.45  # seconds the final verdict takes to sweep in on a terminal
 CELEBRATE = 0.95  # seconds of confetti for a personal best or an achievement
 MAX_BLAMES = 10
 EASTER_EGGS = {69: "nice.", 67: "six seven 🤷"}
+MAX_WORKERS_SHOWN = 8
 COMBO_SHOWN = 10  # passes in a row before the live view starts counting a combo
 COMBO_BROKEN = 1.5  # seconds a broken combo stays on screen
 MAX_RERUN_IDS = 3  # beyond this, the rerun hint is `pytest --lf`
@@ -138,6 +141,15 @@ class GlowReporter(TerminalReporter):
         self._max_combo = 0
         self._combo_broken: tuple[int, float] | None = None  # (combo, when)
         self._oldest_blame: float | None = None
+        self._fight = Fight.for_project(config.rootpath.name) if flag(config, "boss") else None
+        self._last_hit: float | None = None
+        # sound only in an interactive terminal: never in CI or a pipe
+        self._player = sound.Player(self.console.file) if flag(config, "sound") and self._live_enabled else None
+        self._share: str | None = config.getoption("glow_share", None)
+        # under xdist: what each worker is running, and how many tests it has finished
+        self._worker_now: dict[str, tuple[str, float]] = {}
+        self._worker_done: Counter = Counter()
+        self._worker_spinners: dict[str, Spinner] = {}
         self._duration = 0.0
         self._new_pb: float | None = None  # the record this run just beat
         self._unlocked: list[ach.Achievement] = []
@@ -229,10 +241,32 @@ class GlowReporter(TerminalReporter):
         dsession = self.config.pluginmanager.get_plugin("dsession")
         if dsession is not None and hasattr(dsession, "terminal"):
             dsession.terminal = self
+        if dsession is not None:
+            # xdist relays logstart/logfinish without saying which worker sent them
+            for event in ("worker_logstart", "worker_logfinish"):
+                relay = getattr(dsession, event, None)
+                if callable(relay):
+                    setattr(dsession, event, self._tracking(relay, event == "worker_logstart"))
         trdist = self.config.pluginmanager.get_plugin("terminaldistreporter")
         if trdist is not None:
             trdist.tr = self
             trdist._isatty = True
+
+    def _tracking(self, relay, starting: bool):
+        def track(node: Any, **kw: Any) -> Any:
+            worker = str(getattr(getattr(node, "gateway", None), "id", ""))
+            nodeid = kw.get("nodeid", "")
+            if worker:
+                with self._lock:
+                    if starting:
+                        self._worker_now[worker] = (nodeid, time.monotonic())
+                    else:
+                        self._worker_done[worker] += 1
+                        if self._worker_now.get(worker, ("",))[0] == nodeid:
+                            del self._worker_now[worker]
+            return relay(node=node, **kw)
+
+        return track
 
     def pytest_report_header(self, config: pytest.Config) -> list[str]:
         return []
@@ -407,19 +441,26 @@ class GlowReporter(TerminalReporter):
             fs.done += 1
             fs.categories.append(ts.outcome)
             fs.finished_at.append(now)
+            if ts.outcome not in render.FAILING:
+                self._last_hit = now
+            broke = None
             if ts.outcome == "passed":
                 self._combo += 1
                 self._max_combo = max(self._max_combo, self._combo)
             elif ts.outcome in render.FAILING:
                 if self._combo >= COMBO_SHOWN:
                     self._combo_broken = (self._combo, now)
+                    broke = self._combo
                 self._combo = 0
+            combo = self._combo
             fs.counts[ts.outcome] += 1
             fs.duration += ts.duration
             fs.total = max(fs.total, fs.done)
             file_done = fs.done >= fs.total and not fs.flushed
             if file_done:
                 fs.flushed = True
+        if self._player is not None:
+            self._sound_for(ts.outcome, combo, broke)
         if self._verbose > 0:
             self._print(
                 Text.assemble(
@@ -432,6 +473,18 @@ class GlowReporter(TerminalReporter):
             )
         if file_done and self._verbose >= 0:
             self._print(self._file_line(fs))
+
+    def _sound_for(self, outcome: str, combo: int, broke: int | None) -> None:
+        player = self._player
+        level = sound.milestone(combo) if outcome == "passed" else None
+        if level is not None:
+            player.play(f"combo{level}")
+        elif outcome in render.FAILING and self._fight is not None:
+            player.play("hurt")
+        elif broke:
+            player.play("combo_breaker")
+        elif self._fight is not None:
+            player.hit(crit=combo >= COMBO_SHOWN)
 
     def _file_line(self, fs: FileState, now: float | None = None) -> Text:
         live = now is not None
@@ -498,6 +551,9 @@ class GlowReporter(TerminalReporter):
                 parts.append(Text(f"  … {len(active) - MAX_ACTIVE_FILES} more files running", style="dim"))
 
             slow = sorted((t0, nodeid) for nodeid, t0 in self._running.items() if now - t0 >= SLOW_RUNNING)
+            if len(self._workers) > 1:
+                parts += [Text(""), *self._worker_lines(now)]
+                slow = []  # the worker lines already time what's running
             show_file = len(active) > 1
             for t0, nodeid in slow[:MAX_RUNNING_TESTS]:
                 elapsed = now - t0
@@ -523,6 +579,9 @@ class GlowReporter(TerminalReporter):
                 Text("⏱ " + render.fmt_clock(elapsed), style="dim"),
                 Text("eta " + (render.fmt_clock(eta) if eta is not None else "…"), style="dim"),
             )
+            if self._fight is not None:
+                self._fight.hp = total
+                parts += [Text(""), arena(self._fight, total - self._hits(), failing, now, self._last_hit, self._combo)]
             parts += [Text(""), overall]
             combo = self._combo_line(now)
             if combo is not None:
@@ -869,6 +928,33 @@ class GlowReporter(TerminalReporter):
         if len(slower) > 5:
             self._print(Text(f"     … and {len(slower) - 5} more slower than usual", style="dim"))
 
+    def _hits(self) -> int:
+        return sum(n for c, n in self._counts.items() if c not in render.FAILING)
+
+    def _worker_lines(self, now: float) -> list[Text]:
+        lines = []
+        for worker in sorted(self._workers, key=lambda w: (len(w), w))[:MAX_WORKERS_SHOWN]:
+            spinner = self._worker_spinners.setdefault(worker, Spinner("dots", style="cyan"))
+            running = self._worker_now.get(worker)
+            line = Text.assemble("  ", (f"{worker:<4}", "bold"), " ")
+            if running is None:
+                line.append("·", style="dim")
+            else:
+                line.append_text(spinner.render(now))
+            line.append(f" {self._worker_done[worker]:>4} done  ", style="dim")
+            if running is None:
+                line.append("idle", style="dim")
+            else:
+                nodeid, t0 = running
+                elapsed = now - t0
+                st = "bold red" if elapsed >= 5 else "yellow" if elapsed >= 1 else "dim"
+                line.append_text(render.nodeid_text(nodeid))
+                line.append("  ⏱ " + render.fmt_clock(elapsed), style=st)
+            lines.append(line)
+        if len(self._workers) > MAX_WORKERS_SHOWN:
+            lines.append(Text(f"  … {len(self._workers) - MAX_WORKERS_SHOWN} more workers", style="dim"))
+        return lines
+
     def _combo_line(self, now: float) -> Text | None:
         broken = self._combo_broken
         if broken is not None and now - broken[1] < COMBO_BROKEN and self._combo < COMBO_SHOWN:
@@ -967,6 +1053,7 @@ class GlowReporter(TerminalReporter):
             weekday=self._weekday,
             oldest_blame=self._oldest_blame,
             max_combo=self._max_combo,
+            boss_slain=self._fight is not None and ok and self._done >= 100,
             counts=Counter(self._counts),
             done=self._done,
             warnings=len(self.stats.get("warnings", [])),
@@ -1055,6 +1142,18 @@ class GlowReporter(TerminalReporter):
             line3.append(f" ({render.fmt_dur(self._new_pb)} → {render.fmt_dur(duration)})", style="dim")
 
         lines = [line1, line3]
+        if self._fight is not None and self._done:
+            self._fight.hp = max(self._total, self._done)
+            lines.append(
+                outcome(
+                    self._fight,
+                    self._fight.hp - self._hits(),
+                    failing,
+                    self._hits(),
+                    render.fmt_dur(duration),
+                    exitstatus == pytest.ExitCode.INTERRUPTED,
+                )
+            )
         coverage_line = self._coverage_line()
         if coverage_line is not None:
             lines.append(coverage_line)
@@ -1122,6 +1221,39 @@ class GlowReporter(TerminalReporter):
                     live.update(frame(elapsed))
                     time.sleep(1 / 60)
         self.console.print(panel())
+        if self._share:
+            self._save_card(icon, word, stops, counts, lines[1:])
+        if self._player is not None and self._done:
+            self._player.play(self._final_sound(failing, exitstatus), bell=True)
+
+    def _final_sound(self, failing: int, exitstatus: int) -> str:
+        if exitstatus == pytest.ExitCode.INTERRUPTED:
+            return "sad_trombone"
+        if self._fight is not None:
+            if failing >= HEARTS:
+                return "game_over"
+            if not failing:
+                return "boss_down"
+        if failing:
+            return "sad_trombone"
+        return "airhorn" if self._new_pb or self._unlocked else "level_clear"
+
+    def _save_card(self, icon: str, word: str, stops: tuple, counts: Counter, details: list) -> None:
+        card = share.Card(
+            project=self.config.rootpath.name,
+            icon=icon,
+            word=word,
+            stops=stops,
+            counts=counts,
+            details=[line for line in details if not line.plain.startswith("runs ")],  # sparkline: too noisy for a card
+        )
+        path = os.path.join(str(self.config.invocation_params.dir), self._share)
+        try:
+            share.save(card, path)
+        except OSError as e:
+            self._print(Text(f"  couldn't save the card: {e}", style="red"))
+            return
+        self._print(Text.assemble(("  ✦ ", "magenta"), ("card saved to ", "dim"), (self._share, "bold")))
 
     def _save_history(self, exitstatus: int) -> None:
         if not self._history.enabled or not self._done or exitstatus == pytest.ExitCode.INTERRUPTED:
