@@ -535,3 +535,26 @@ def test_same_failures_are_grouped(pytester):
     assert "test_db.py::test_query[3]" in out
     assert "test_query[0] (setup)  +3 more like this  ConnectionError" in out
     assert out.count("Traceback") == 2
+
+
+def test_no_links_when_piped(pytester):
+    pytester.makepyfile("def test_a(): assert 0\n")
+    result = pytester.runpytest_subprocess("--glow")
+    assert "\x1b]8;" not in "\n".join(result.outlines)
+
+
+def test_link_urls(pytester):
+    pytester.makeconftest("""
+        def pytest_terminal_summary(terminalreporter):
+            tr = terminalreporter
+            tr._link = "x://{path}:{line}"
+            tr.write_line("url=" + tr._url("sub dir/a.py", 3))
+            tr.write_line("test=" + tr._test_url("test_links.py::test_a"))
+            tr.write_line("crash=" + tr._crash_url(tr.stats["failed"][0]))
+    """)
+    pytester.makepyfile(test_links="import os\n\ndef test_a():\n    assert os\n    assert 0\n")
+    _, out = run(pytester, "--glow")
+    root = str(pytester.path).replace(" ", "%20")
+    assert f"url=x://{root}/sub%20dir/a.py:3" in out
+    assert f"test=x://{root}/test_links.py:3" in out
+    assert f"crash=x://{root}/test_links.py:5" in out

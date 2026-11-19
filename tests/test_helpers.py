@@ -278,3 +278,17 @@ def test_hits_are_throttled(monkeypatch):
         player.hit(crit=False)
     player.hit(crit=True)
     assert played == ["hit"]
+
+
+def test_link_template(monkeypatch):
+    from pytest_glow.reporter import link_template
+
+    monkeypatch.delenv("PYTEST_GLOW_LINK", raising=False)
+    monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
+    assert link_template() == "file://{path}"
+    monkeypatch.setenv("TERM_PROGRAM", "vscode")
+    assert link_template() == "vscode://file{path}:{line}"
+    monkeypatch.setenv("PYTEST_GLOW_LINK", "pycharm://open?file={path}&line={line}")
+    assert link_template() == "pycharm://open?file={path}&line={line}"
+    monkeypatch.setenv("PYTEST_GLOW_LINK", "off")
+    assert link_template() is None
