@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-19
+
 - Truecolor gradients throughout; the live bar shimmers and freshly finished tests flash in the file strips.
 - The verdict sweeps in on a terminal; confetti for a new personal best or an achievement.
 - Personal bests per number of tests, and fourteen achievements unlocked once per project.
