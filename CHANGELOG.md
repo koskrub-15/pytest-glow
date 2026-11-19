@@ -10,6 +10,10 @@ All notable changes to this project are documented here. The format follows
 - Clickable paths for tests, files and failures (OSC 8); `PYTEST_GLOW_LINK` picks the URL.
 - A test running for over 3s shows the line it's stuck on and what it's waiting in.
 - The slowest fixtures, with setup and teardown time.
+- XP and levels with titles; a level up gets confetti and a jingle.
+- Shiny runs: one green run in 500 comes out gold, with the Shiny Hunter achievement.
+- Boss phases (ENRAGED, LAST STAND, with a roar) and loot from slain bosses.
+- `pytest --glow-wrapped`: everything glow remembers about the project, as a recap.
 
 ## [0.2.0] - 2026-11-19
 

@@ -40,13 +40,20 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 - personal bests: the fastest green run for a given number of tests, `🏆 new PB` when you beat it
 - achievements, each unlocked once per project: First Blood, Phoenix, Night Owl, Minimalist, Sniper,
   Speedrunner, Surgeon, Clean Sweep, Centurion, Friday Deploy, Archaeologist, Glass Cannon, Unstoppable,
-  Boss Slayer
+  Boss Slayer, Shiny Hunter
+- XP for every run (passes, green, combos, fixed tests, boss kills) and levels with titles, from Print
+  Debugger to The One Who Runs pytest. A level up gets confetti and its own jingle
+- one green run in 500 comes out ✦ SHINY ✦: gold verdict, sparkle, 250 bonus XP
 - a burst of confetti over the verdict when you set a record or unlock something (never in CI or pipes)
 - under each failure, who last touched the failing line and when, from `git blame`
 - a duration sparkline next to each of the slowest tests, so you see the ones getting slower
 - certain pass counts are acknowledged
 - `--glow-boss`: the suite is a boss fight. Every test that doesn't fail is a hit on your project's nemesis
-  (the same boss every time), every failure costs you one of three hearts
+  (the same boss every time), every failure costs you one of three hearts. Below half its HP it gets
+  ENRAGED, below a tenth it makes its LAST STAND, and once slain it drops loot: sixteen items, common to
+  legendary, to collect per project
+- `pytest --glow-wrapped`: your project's year-in-review. Runs, time spent, green rate, level, records, a hall
+  of shame (failed the most, flakiest, slowest), the hours you test at, loot and achievements. Runs no tests
 - `--glow-share`: the run as an SVG card, ready to post
 - `--glow-sound`: 8-bit sounds, synthesized on the fly (nothing to license): a power-up at combo 10, 25, 50,
   100…, a slide down on a COMBO BREAKER, hits and crits on the boss, then a level-clear jingle, an air horn for
@@ -83,6 +90,7 @@ Just run `pytest`. Everything else is optional:
 | `--glow-boss` or `PYTEST_GLOW_BOSS=1` | fight the suite as a boss; `glow_boss = true` in the ini to keep it on |
 | `--glow-sound` or `PYTEST_GLOW_SOUND=1` | 8-bit sounds for combos, the boss and the end of the run (terminal only); `glow_sound = true` in the ini |
 | `--glow-share[=PATH]` | save the run as an SVG card, `glow-card.svg` by default |
+| `--glow-wrapped` | show everything glow remembers about the project and exit; with `--glow-share`, save it as SVG |
 | `PYTEST_GLOW_LINK` | where clickable paths go, e.g. `pycharm://open?file={path}&line={line}`; `off` to turn them off |
 | `-v` | also list every test as it finishes |
 | `-q` | only failures and the final summary |
