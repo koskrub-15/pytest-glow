@@ -3,7 +3,7 @@
 A live, [rich](https://github.com/Textualize/rich)-powered reporter for pytest. Same tests, same
 flags, same exit codes. You just get to watch them run instead of reading a row of dots.
 
-![pytest-glow running a test suite as a boss fight: live file bars, failures as they happen, a combo, and the verdict](https://raw.githubusercontent.com/koskrub-15/pytest-glow/main/docs/demo.gif)
+![pytest-glow running a test suite as a boss fight: live file bars, failures as they happen, a combo, and the verdict](https://github.com/koskrub-15/pytest-glow/raw/main/docs/demo.gif)
 
 ## What you get
 
@@ -47,7 +47,7 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
   100…, a slide down on a COMBO BREAKER, hits and crits on the boss, then a level-clear jingle, an air horn for
   a record, or the sad trombone. Hear them all with `python -m pytest_glow.sound`
 
-![the end of a run up close: a rich traceback, coverage and the verdict](https://raw.githubusercontent.com/koskrub-15/pytest-glow/main/docs/screenshot.svg)
+![the end of a run up close: a rich traceback, coverage and the verdict](https://github.com/koskrub-15/pytest-glow/raw/main/docs/screenshot.svg)
 
 **Coverage**: with `pytest-cov` installed, its plain table is replaced by a bar per file, the missing line
 ranges, per-file gains and drops since the last run, and the total plus `--cov-fail-under` in the verdict.
