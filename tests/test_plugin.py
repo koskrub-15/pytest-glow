@@ -583,11 +583,18 @@ def test_slowest_fixtures(pytester):
     )
     _, out = run(pytester, "--glow")
     assert "slowest fixtures" in out
+    # times only from below: a busy CI runner is slower, never faster
     db = next(line for line in out.splitlines() if " db " in line)
-    assert "session · setup 3" in db and "teardown 1" in db
+    assert "session · " in db
+    assert _seconds(re.search(r"setup (\S+),", db)[1]) >= 0.3
+    assert _seconds(re.search(r"teardown (\S+?)[ ·…]", db + " ")[1]) >= 0.15
     client = next(line for line in out.splitlines() if " client " in line)
-    assert "×4, 3" in client
+    assert _seconds(re.search(r"×4, (\S+) each", client)[1]) >= 0.03
     assert out.index(" db ") < out.index(" client ")
+
+
+def _seconds(shown):
+    return float(shown[:-2]) / 1000 if shown.endswith("ms") else float(shown[:-1])
 
 
 def test_no_fixture_section_for_quick_fixtures(pytester):
