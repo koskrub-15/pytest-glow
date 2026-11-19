@@ -450,3 +450,33 @@ def test_xdist_tracks_what_each_worker_runs(pytester):
     pytester.makepyfile("import pytest\n@pytest.mark.parametrize('i', range(8))\ndef test_n(i): pass\n")
     _, out = run(pytester, "--glow", "-n", "2")
     assert "workers=2 finished=8" in out
+
+
+def test_boss_fight_victory(pytester):
+    pytester.makepyfile("def test_a(): pass\ndef test_b(): pass\n")
+    _, out = run(pytester, "--glow", "--glow-boss")
+    assert "VICTORY" in out
+    assert "falls · 2 hits in" in out
+
+
+def test_boss_fight_wounds_and_defeat(pytester):
+    pytester.makepyfile("def test_a(): pass\ndef test_b(): assert 0\n")
+    _, out = run(pytester, "--glow", "--glow-boss")
+    assert "survives with 1 HP" in out
+    assert "you have ❤❤♡ left" in out
+    pytester.makepyfile("import pytest\n@pytest.mark.parametrize('i', range(4))\ndef test_b(i): assert 0\n")
+    _, out = run(pytester, "--glow", "--glow-boss")
+    assert "DEFEATED by the" in out
+
+
+def test_boss_from_the_environment_and_ini(pytester, monkeypatch):
+    pytester.makepyfile("def test_a(): pass\n")
+    _, out = run(pytester, "--glow")
+    assert "VICTORY" not in out
+    monkeypatch.setenv("PYTEST_GLOW_BOSS", "1")
+    _, out = run(pytester, "--glow")
+    assert "VICTORY" in out
+    monkeypatch.delenv("PYTEST_GLOW_BOSS")
+    pytester.makeini("[pytest]\nglow_boss = true\n")
+    _, out = run(pytester, "--glow")
+    assert "VICTORY" in out

@@ -35,6 +35,28 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="use the glow reporter even when stdout is not a terminal",
     )
     group.addoption("--no-glow", action="store_false", dest="glow", help="use pytest's standard reporter")
+    group.addoption(
+        "--glow-boss",
+        action="store_true",
+        default=None,
+        help="fight the test suite as a boss (also PYTEST_GLOW_BOSS=1 or glow_boss = true in the ini)",
+    )
+    parser.addini("glow_boss", "fight the test suite as a boss", type="bool", default=False)
+
+
+_TRUE = ("1", "true", "yes", "on")
+
+
+def flag(config: pytest.Config, name: str) -> bool:
+    """An opt-in mode, from the command line, the environment or the ini file."""
+    if config.getoption(f"glow_{name}", None):
+        return True
+    if os.environ.get(f"PYTEST_GLOW_{name.upper()}", "").strip().lower() in _TRUE:
+        return True
+    try:
+        return bool(config.getini(f"glow_{name}"))
+    except ValueError:
+        return False
 
 
 def _wanted(config: pytest.Config) -> bool | None:
@@ -45,7 +67,7 @@ def _wanted(config: pytest.Config) -> bool | None:
     env = os.environ.get("PYTEST_GLOW", "").strip().lower()
     if env in ("0", "false", "no", "off"):
         return False
-    if env in ("1", "true", "yes", "on"):
+    if env in _TRUE:
         return True
     return None
 

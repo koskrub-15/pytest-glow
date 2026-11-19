@@ -136,6 +136,7 @@ def facts(**kw):
         ({"ok": False, "oldest_blame": 6 * 365 * 86400}, "archaeologist"),
         ({"ok": False, "coverage_total": 100.0}, "glass_cannon"),
         ({"max_combo": 100}, "unstoppable"),
+        ({"boss_slain": True}, "boss_slayer"),
     ],
 )
 def test_achievements(kw, key):
@@ -186,3 +187,30 @@ def test_personal_best_only_counts_green_runs_of_the_same_size():
 def test_combos_heat_up():
     assert render.combo_stops(10) == render.GRADIENTS["cyan"]
     assert render.combo_stops(150) == render.GRADIENTS["fire"]
+
+
+def test_every_project_meets_the_same_boss():
+    from pytest_glow.boss import BOSSES, Fight
+
+    first = Fight.for_project("my-app")
+    assert first.name in BOSSES
+    assert Fight.for_project("my-app").name == first.name
+    assert len({Fight.for_project(f"p{i}").name for i in range(50)}) > 1
+
+
+def test_boss_eyes_weaken():
+    from pytest_glow.boss import Fight
+
+    fight = Fight.for_project("x", hp=10)
+    assert [fight.eyes(left) for left in (10, 4, 1)] == ["●", "◦", "✖"]
+    sprite = fight.sprite_text(1, heat=0).plain
+    assert "✖" in sprite
+    assert len(set(map(len, sprite.split("\n")))) == 1  # rows line up
+
+
+def test_hearts():
+    from pytest_glow.boss import hearts
+
+    assert hearts(0).plain == "❤❤❤"
+    assert hearts(2).plain == "❤♡♡"
+    assert hearts(9).plain == "♡♡♡"

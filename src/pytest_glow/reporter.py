@@ -27,7 +27,9 @@ from . import achievements as ach
 from . import coverage as cov
 from . import diff as assert_diff
 from .blame import ago, blame, changed_since, describe, head
+from .boss import Fight, arena, outcome
 from .history import History, is_flaky
+from .plugin import flag
 
 SUMMARY_EXIT_CODES = (
     pytest.ExitCode.OK,
@@ -139,6 +141,8 @@ class GlowReporter(TerminalReporter):
         self._max_combo = 0
         self._combo_broken: tuple[int, float] | None = None  # (combo, when)
         self._oldest_blame: float | None = None
+        self._fight = Fight.for_project(config.rootpath.name) if flag(config, "boss") else None
+        self._last_hit: float | None = None
         # under xdist: what each worker is running, and how many tests it has finished
         self._worker_now: dict[str, tuple[str, float]] = {}
         self._worker_done: Counter = Counter()
@@ -434,6 +438,8 @@ class GlowReporter(TerminalReporter):
             fs.done += 1
             fs.categories.append(ts.outcome)
             fs.finished_at.append(now)
+            if ts.outcome not in render.FAILING:
+                self._last_hit = now
             if ts.outcome == "passed":
                 self._combo += 1
                 self._max_combo = max(self._max_combo, self._combo)
@@ -553,6 +559,9 @@ class GlowReporter(TerminalReporter):
                 Text("⏱ " + render.fmt_clock(elapsed), style="dim"),
                 Text("eta " + (render.fmt_clock(eta) if eta is not None else "…"), style="dim"),
             )
+            if self._fight is not None:
+                self._fight.hp = total
+                parts += [Text(""), arena(self._fight, total - self._hits(), failing, now, self._last_hit, self._combo)]
             parts += [Text(""), overall]
             combo = self._combo_line(now)
             if combo is not None:
@@ -899,6 +908,9 @@ class GlowReporter(TerminalReporter):
         if len(slower) > 5:
             self._print(Text(f"     … and {len(slower) - 5} more slower than usual", style="dim"))
 
+    def _hits(self) -> int:
+        return sum(n for c, n in self._counts.items() if c not in render.FAILING)
+
     def _worker_lines(self, now: float) -> list[Text]:
         lines = []
         for worker in sorted(self._workers, key=lambda w: (len(w), w))[:MAX_WORKERS_SHOWN]:
@@ -1021,6 +1033,7 @@ class GlowReporter(TerminalReporter):
             weekday=self._weekday,
             oldest_blame=self._oldest_blame,
             max_combo=self._max_combo,
+            boss_slain=self._fight is not None and ok and self._done >= 100,
             counts=Counter(self._counts),
             done=self._done,
             warnings=len(self.stats.get("warnings", [])),
@@ -1109,6 +1122,18 @@ class GlowReporter(TerminalReporter):
             line3.append(f" ({render.fmt_dur(self._new_pb)} → {render.fmt_dur(duration)})", style="dim")
 
         lines = [line1, line3]
+        if self._fight is not None and self._done:
+            self._fight.hp = max(self._total, self._done)
+            lines.append(
+                outcome(
+                    self._fight,
+                    self._fight.hp - self._hits(),
+                    failing,
+                    self._hits(),
+                    render.fmt_dur(duration),
+                    exitstatus == pytest.ExitCode.INTERRUPTED,
+                )
+            )
         coverage_line = self._coverage_line()
         if coverage_line is not None:
             lines.append(coverage_line)
