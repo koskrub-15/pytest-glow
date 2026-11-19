@@ -7,6 +7,7 @@ import re
 from collections import Counter
 from collections.abc import Iterable
 
+from rich.style import Style
 from rich.text import Text
 
 # category -> (glyph, style, label)
@@ -88,6 +89,13 @@ def path_text(path: str, width: int | None = None) -> Text:
 def nodeid_text(nodeid: str) -> Text:
     path, sep, name = nodeid.partition("::")
     return Text.assemble(path_text(path), (sep, "dim"), (name, "bold"))
+
+
+def linked(text: Text, url: str | None) -> Text:
+    """``text`` as a clickable link (OSC 8) when there's a URL."""
+    if url:
+        text.stylize(Style(link=url))
+    return text
 
 
 def counts_text(counts: Counter, *, compact: bool = True, extra: dict[str, int] | None = None) -> Text:

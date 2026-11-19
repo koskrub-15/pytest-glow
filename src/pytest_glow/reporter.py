@@ -9,6 +9,7 @@ import re
 import shlex
 import threading
 import time
+import urllib.parse
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import IO, Any
@@ -22,7 +23,7 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, render, share, sound
+from . import __version__, hang, render, share, sound
 from . import achievements as ach
 from . import coverage as cov
 from . import diff as assert_diff
@@ -74,6 +75,17 @@ class TestState:
 
 
 @dataclass
+class FixtureTime:
+    setup: float = 0.0
+    teardown: float = 0.0
+    count: int = 0
+
+    @property
+    def total(self) -> float:
+        return self.setup + self.teardown
+
+
+@dataclass
 class Failure:
     report: Any
     traceback: Any = None
@@ -81,6 +93,36 @@ class Failure:
 
 
 _WARNING_LOCATION = re.compile(r"^\S+:\d+: ")
+_ADDRESS = re.compile(r"0x[0-9a-fA-F]{6,}")
+MAX_GROUPED_IDS = 8
+
+
+def link_template() -> str | None:
+    """How file links open: PYTEST_GLOW_LINK, else at the line in VS Code's terminal, else file://."""
+    custom = os.environ.get("PYTEST_GLOW_LINK", "").strip()
+    if custom.lower() in ("0", "off", "false", "no"):
+        return None
+    if custom:
+        return custom
+    if os.environ.get("TERM_PROGRAM") == "vscode":
+        return "vscode://file{path}:{line}"
+    return "file://{path}"
+
+
+def _signature(report: Any) -> tuple | None:
+    """Failures with the same signature failed the same way: same place, same message."""
+    crash = getattr(report.longrepr, "reprcrash", None)
+    if crash is None:
+        return None
+    return (report.when, str(crash.path), crash.lineno, _ADDRESS.sub("0x…", render.crash_message(report)))
+
+
+def group_failures(failures: list) -> list[list]:
+    """Failures grouped by signature, in the order each group first failed."""
+    groups: dict[Any, list] = {}
+    for i, failure in enumerate(failures):
+        groups.setdefault(_signature(failure.report) or i, []).append(failure)
+    return list(groups.values())
 
 
 def _markup_style(markup: dict) -> str:
@@ -106,6 +148,10 @@ class GlowReporter(TerminalReporter):
             highlight=False,
         )
         self._live_enabled = stream.isatty() and self.console.is_terminal
+        # clickable paths (OSC 8) only in a real terminal: in logs they'd be noise
+        self._link = link_template() if self._live_enabled else None
+        self._locations: dict[str, tuple] = {}  # nodeid -> (path from the rootdir, 0-based line)
+        self._fixtures: dict[tuple[str, str], FixtureTime] = {}  # (name, scope) -> time spent in it
         self._live: Live | None = None
         self._lock = threading.RLock()
         self._capture_off = config.getoption("capture", "fd") == "no"
@@ -225,6 +271,7 @@ class GlowReporter(TerminalReporter):
 
     def pytest_sessionstart(self, session: pytest.Session) -> None:
         self._session = session
+        self._main_thread = threading.get_ident()  # where the tests run, unless xdist runs them elsewhere
         try:
             from _pytest import timing
 
@@ -304,7 +351,7 @@ class GlowReporter(TerminalReporter):
                 Text.assemble(
                     ("  ✗ ", "bold red"),
                     ("collection error ", "red"),
-                    render.nodeid_text(report.nodeid or "."),
+                    self._node(report.nodeid or "."),
                     ("  " + render.crash_message(report), "dim red"),
                 )
             )
@@ -376,6 +423,7 @@ class GlowReporter(TerminalReporter):
             if self._t_run is None:
                 self._t_run = now
             self._running[nodeid] = now
+            self._locations[nodeid] = location
             fs = self._file(nodeid)
             if fs.started is None:
                 fs.started = now
@@ -402,6 +450,28 @@ class GlowReporter(TerminalReporter):
                 )
         return report
 
+    @pytest.hookimpl(wrapper=True)
+    def pytest_fixture_setup(self, fixturedef: Any, request: pytest.FixtureRequest):
+        spent = self._fixtures.setdefault((fixturedef.argname, fixturedef.scope), FixtureTime())
+        started: list[float] = []
+
+        def tearing_down() -> None:
+            started.append(time.perf_counter())
+
+        def torn_down() -> None:
+            if started:
+                spent.teardown += time.perf_counter() - started.pop()
+
+        # finalizers run last-in first-out: these two end up around the fixture's own teardown
+        fixturedef.addfinalizer(torn_down)
+        t0 = time.perf_counter()
+        try:
+            return (yield)
+        finally:
+            spent.setup += time.perf_counter() - t0
+            spent.count += 1
+            fixturedef.addfinalizer(tearing_down)
+
     def pytest_assertrepr_compare(self, config: pytest.Config, op: str, left: Any, right: Any) -> None:
         # Only remembered: pytest still writes its own explanation, for --tb=short, xdist and the like.
         if op == "==":
@@ -420,7 +490,7 @@ class GlowReporter(TerminalReporter):
                 key = (report.nodeid, report.when)
                 self._failures.append(Failure(report, self._tracebacks.pop(key, None), self._diffs.pop(key, None)))
         if report.failed and self._verbose >= -1:
-            line = Text.assemble(("  ✗ ", "bold red"), render.nodeid_text(report.nodeid))
+            line = Text.assemble(("  ✗ ", "bold red"), self._node(report.nodeid, self._crash_url(report)))
             if report.when != "call":
                 line.append(f" ({report.when})", style="red")
             line.append("  " + self._crash(self._failures[-1]), style="dim red")
@@ -467,7 +537,7 @@ class GlowReporter(TerminalReporter):
                     "    ",
                     (render.glyph(ts.outcome), render.style(ts.outcome)),
                     " ",
-                    render.nodeid_text(nodeid),
+                    self._node(nodeid),
                     ("  " + render.fmt_dur(ts.duration), "dim"),
                 )
             )
@@ -513,7 +583,7 @@ class GlowReporter(TerminalReporter):
             "  ",
             icon,
             " ",
-            render.path_text(fs.path, self._path_width),
+            render.linked(render.path_text(fs.path, self._path_width), self._url(fs.path)),
             "  ",
             render.strip(fs.categories, fs.total, width, [now - t for t in fs.finished_at] if live else None),
             (f" {count:>7}", "dim"),
@@ -558,8 +628,18 @@ class GlowReporter(TerminalReporter):
             for t0, nodeid in slow[:MAX_RUNNING_TESTS]:
                 elapsed = now - t0
                 st = "bold red" if elapsed >= 5 else "yellow" if elapsed >= 1 else "dim"
-                name = render.nodeid_text(nodeid) if show_file else Text(render.test_name(nodeid))
+                name = (
+                    self._node(nodeid)
+                    if show_file
+                    else render.linked(Text(render.test_name(nodeid)), self._test_url(nodeid))
+                )
                 parts.append(Text.assemble("     ", ("↳ ", "dim"), name, ("  ⏱ " + render.fmt_clock(elapsed), st)))
+                if elapsed >= hang.HANG and not self._workers:
+                    where = self._where_stuck()
+                    if where is not None:
+                        line = Text("       ") + where
+                        line.no_wrap, line.overflow = True, "ellipsis"
+                        parts.append(line)
 
             total = max(self._total, self._done, 1)
             elapsed = now - self._t_run
@@ -651,6 +731,7 @@ class GlowReporter(TerminalReporter):
         self._celebrations(exitstatus)
         if show:
             self._print_slowest()
+            self._print_fixtures()
             self._print_insights()
             self._print_achievements()
             self._print_changes()
@@ -675,16 +756,18 @@ class GlowReporter(TerminalReporter):
             return
         self._rule("collection errors", "red")
         for report in self._collect_errors:
-            self.console.print(Text.assemble(("✗ ", "bold red"), render.nodeid_text(report.nodeid or ".")))
+            self.console.print(Text.assemble(("✗ ", "bold red"), self._node(report.nodeid or ".")))
             self.console.print(render.longrepr_text(str(report.longreprtext)))
 
     def _print_failures(self) -> None:
         if not self._failures or self._tbstyle == "no":
             return
-        self._rule(f"failures ({len(self._failures)})", "red")
-        for i, failure in enumerate(self._failures):
+        groups = group_failures(self._failures)
+        distinct = f" · {len(groups)} distinct" if len(groups) < len(self._failures) else ""
+        self._rule(f"failures ({len(self._failures)}{distinct})", "red")
+        for i, (failure, *same) in enumerate(groups):
             report = failure.report
-            title = Text.assemble(("✗ ", "bold red"), render.nodeid_text(report.nodeid))
+            title = Text.assemble(("✗ ", "bold red"), self._node(report.nodeid, self._crash_url(report)))
             if report.when != "call":
                 title.append(f"  error in {report.when}", style="red")
             if i:
@@ -702,6 +785,8 @@ class GlowReporter(TerminalReporter):
             if failure.diff is not None and self._tbstyle in ("auto", "long"):
                 title = Text.assemble(" ", ("− left", assert_diff.LEFT), "  ", ("+ right", assert_diff.RIGHT), " ")
                 self.console.print(render.GlowPanel(failure.diff.render(), render.GRADIENTS["glow"], title))
+            if same:
+                self._print_same(same)
             for name, content in report.sections:
                 if not content.strip():
                     continue
@@ -717,6 +802,43 @@ class GlowReporter(TerminalReporter):
                         padding=(0, 1),
                     )
                 )
+
+    def _url(self, path: str, line: int | None = None) -> str | None:
+        """A link to open ``path`` (absolute, or from the rootdir) at ``line``."""
+        if self._link is None or not path:
+            return None
+        path = os.path.abspath(os.path.join(str(self.config.rootpath), path)).replace(os.sep, "/")
+        if not path.startswith("/"):
+            path = "/" + path  # C:/x → /C:/x
+        return self._link.format(path=urllib.parse.quote(path), line=line or 1)
+
+    def _crash_url(self, report: Any) -> str | None:
+        crash = getattr(report.longrepr, "reprcrash", None)
+        if crash is None:
+            return self._test_url(report.nodeid)
+        return self._url(str(crash.path), crash.lineno)
+
+    def _test_url(self, nodeid: str) -> str | None:
+        if self._link is None:
+            return None
+        location = self._locations.get(nodeid)
+        if location is None:
+            return self._url(nodeid.split("::", 1)[0])
+        path, line = location[0], location[1]
+        return self._url(path, line + 1 if line is not None else None)
+
+    def _node(self, nodeid: str, url: str | None = None) -> Text:
+        return render.linked(render.nodeid_text(nodeid), url or self._test_url(nodeid))
+
+    def _print_same(self, same: list) -> None:
+        noun = "test" if len(same) == 1 else "tests"
+        self.console.print(Text.assemble(("  ⧉ ", "bold red"), (f"the same failure in {len(same)} more {noun}", "red")))
+        for failure in same[:MAX_GROUPED_IDS]:
+            self.console.print(
+                Text.assemble("    ", self._node(failure.report.nodeid, self._crash_url(failure.report)))
+            )
+        if len(same) > MAX_GROUPED_IDS:
+            self.console.print(Text(f"    … and {len(same) - MAX_GROUPED_IDS} more", style="dim"))
 
     def _crash(self, failure: Failure) -> str:
         if failure.diff is not None and failure.diff.summary:
@@ -873,11 +995,39 @@ class GlowReporter(TerminalReporter):
             table.add_row(
                 Text("  " + render.fmt_dur(dur), style=st),
                 render.glow_bar(dur, top, 12, stops),
-                render.nodeid_text(nodeid),
+                self._node(nodeid),
                 trend(nodeid, dur),
                 compare,
             )
         self.console.print(table)
+
+    def _print_fixtures(self) -> None:
+        ranked = sorted(self._fixtures.items(), key=lambda item: -item[1].total)[:5]
+        if not ranked or ranked[0][1].total < 0.2:
+            return
+        self.console.print()
+        self.console.print(Text("  slowest fixtures", style="bold dim"))
+        ranked = [(key, spent) for key, spent in ranked if spent.total >= 0.05]
+        top = ranked[0][1].total
+        name_width = max(len(name) for (name, _), _ in ranked)
+        for (name, scope), spent in ranked:
+            details = [] if scope == "function" else [scope]
+            if spent.count > 1:
+                details.append(f"×{spent.count}, {render.fmt_dur(spent.total / spent.count)} each")
+            if spent.teardown >= 0.01:
+                details.append(f"setup {render.fmt_dur(spent.setup)}, teardown {render.fmt_dur(spent.teardown)}")
+            share = spent.total / self._duration if self._duration else 0
+            if share >= 0.2:
+                details.append(f"{share:.0%} of the run")
+            st = "bold red" if spent.total >= 5 else "yellow" if spent.total >= 1 else "default"
+            # on a narrow terminal, only the details at the end get cut
+            line = Text.assemble(
+                (f"  {render.fmt_dur(spent.total):>7}  ", st),
+                render.glow_bar(spent.total, top, 12, render.GRADIENTS["glow"]),
+                (f"  {name:<{name_width}}  ", "bold"),
+                (" · ".join(details), "dim"),
+            )
+            self._print(line)
 
     def _print_insights(self) -> None:
         if not self._history.enabled:
@@ -901,7 +1051,7 @@ class GlowReporter(TerminalReporter):
         self.console.print()
         for icon, st, title, items in (("✨", "green", "fixed", fixed), ("💥", "red", "newly failing", broken)):
             for nodeid in items[:5]:
-                self._print(Text.assemble(f"  {icon} ", (f"{title}  ", f"bold {st}"), render.nodeid_text(nodeid)))
+                self._print(Text.assemble(f"  {icon} ", (f"{title}  ", f"bold {st}"), self._node(nodeid)))
             if len(items) > 5:
                 self._print(Text(f"     … and {len(items) - 5} more {title}", style="dim"))
         for nodeid, trail in flaky[:5]:
@@ -909,7 +1059,7 @@ class GlowReporter(TerminalReporter):
                 Text.assemble(
                     "  〰 ",
                     ("flaky  ", "bold yellow"),
-                    render.nodeid_text(nodeid),
+                    self._node(nodeid),
                     "  ",
                     render.outcome_trail(trail[-10:]),
                 )
@@ -919,7 +1069,7 @@ class GlowReporter(TerminalReporter):
                 Text.assemble(
                     "  🐢 ",
                     ("slower  ", "bold yellow"),
-                    render.nodeid_text(nodeid),
+                    self._node(nodeid),
                     ("  " + render.fmt_dur(dur), "bold yellow"),
                     (f", usually {render.fmt_dur(usual)} ", "dim"),
                     (f"×{dur / usual:.1f}", "yellow"),
@@ -927,6 +1077,15 @@ class GlowReporter(TerminalReporter):
             )
         if len(slower) > 5:
             self._print(Text(f"     … and {len(slower) - 5} more slower than usual", style="dim"))
+
+    def _where_stuck(self) -> Text | None:
+        frame = hang.thread_frame(getattr(self, "_main_thread", None))
+        spots = hang.stuck_at(frame, str(self.config.rootpath))
+        mine = spots[0]
+        where = hang.describe(spots, str(self.config.invocation_params.dir))
+        if where is not None and mine is not None:
+            render.linked(where, self._url(mine.path, mine.line))
+        return where
 
     def _hits(self) -> int:
         return sum(n for c, n in self._counts.items() if c not in render.FAILING)
@@ -948,7 +1107,7 @@ class GlowReporter(TerminalReporter):
                 nodeid, t0 = running
                 elapsed = now - t0
                 st = "bold red" if elapsed >= 5 else "yellow" if elapsed >= 1 else "dim"
-                line.append_text(render.nodeid_text(nodeid))
+                line.append_text(self._node(nodeid))
                 line.append("  ⏱ " + render.fmt_clock(elapsed), style=st)
             lines.append(line)
         if len(self._workers) > MAX_WORKERS_SHOWN:
@@ -994,7 +1153,7 @@ class GlowReporter(TerminalReporter):
         suspects |= {render.file_of(r.nodeid) for r in self._collect_errors if r.nodeid}
         changed.sort(key=lambda p: p not in suspects)  # stable: the suspects first, newest first within
         for path in changed[:8]:
-            line = Text("     ") + render.path_text(path)
+            line = Text("     ") + render.linked(render.path_text(path), self._url(path))
             if path in suspects:
                 line.append("  ← failing here", style="bold red")
             self._print(line)
@@ -1174,19 +1333,20 @@ class GlowReporter(TerminalReporter):
 
         self.console.print()
         if self._failures and not getattr(self, "no_summary", False):
-            for failure in self._failures[:15]:
+            groups = group_failures(self._failures)
+            for failure, *same in groups[:15]:
                 report = failure.report
                 where = "" if report.when == "call" else f" ({report.when})"
-                self._print(
-                    Text.assemble(
-                        ("  ✗ ", "bold red"),
-                        render.nodeid_text(report.nodeid),
-                        (where, "red"),
-                        ("  " + self._crash(failure), "dim"),
-                    )
+                line = Text.assemble(
+                    ("  ✗ ", "bold red"), self._node(report.nodeid, self._crash_url(report)), (where, "red")
                 )
-            if len(self._failures) > 15:
-                self._print(Text(f"    … and {len(self._failures) - 15} more", style="dim"))
+                if same:  # before the message, which may get cut at the edge
+                    line.append(f"  +{len(same)} more like this", style="bold red")
+                line.append("  " + self._crash(failure), style="dim")
+                self._print(line)
+            if len(groups) > 15:
+                rest = sum(map(len, groups[15:]))
+                self._print(Text(f"    … and {rest} more", style="dim"))
             rerun = self._rerun_command()
             if rerun:
                 self._print(Text.assemble(("  ↻ rerun  ", "bold cyan"), (rerun, "cyan")))

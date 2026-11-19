@@ -507,3 +507,97 @@ def test_sound_stays_quiet_without_a_terminal(pytester):
     pytester.makepyfile("def test_a(): pass\n")
     result = pytester.runpytest_subprocess("--glow", "--glow-sound")
     assert "\a" not in "\n".join(result.outlines)
+
+
+def test_same_failures_are_grouped(pytester):
+    pytester.makepyfile(
+        test_db="""
+        import pytest
+
+        class Box:
+            pass
+
+        @pytest.fixture
+        def db():
+            raise ConnectionError(f"no database, see {Box()!r}")
+
+        @pytest.mark.parametrize("i", range(4))
+        def test_query(db, i):
+            pass
+
+        def test_math():
+            assert 1 == 2
+        """
+    )
+    _, out = run(pytester, "--glow")
+    assert "failures (5 · 2 distinct)" in out
+    assert "⧉ the same failure in 3 more tests" in out
+    assert "test_db.py::test_query[3]" in out
+    assert "test_query[0] (setup)  +3 more like this  ConnectionError" in out
+    assert out.count("Traceback") == 2
+
+
+def test_no_links_when_piped(pytester):
+    pytester.makepyfile("def test_a(): assert 0\n")
+    result = pytester.runpytest_subprocess("--glow")
+    assert "\x1b]8;" not in "\n".join(result.outlines)
+
+
+def test_link_urls(pytester):
+    pytester.makeconftest("""
+        def pytest_terminal_summary(terminalreporter):
+            tr = terminalreporter
+            tr._link = "x://{path}:{line}"
+            tr.write_line("url=" + tr._url("sub dir/a.py", 3))
+            tr.write_line("test=" + tr._test_url("test_links.py::test_a"))
+            tr.write_line("crash=" + tr._crash_url(tr.stats["failed"][0]))
+    """)
+    pytester.makepyfile(test_links="import os\n\ndef test_a():\n    assert os\n    assert 0\n")
+    _, out = run(pytester, "--glow")
+    root = str(pytester.path).replace(" ", "%20")
+    assert f"url=x://{root}/sub%20dir/a.py:3" in out
+    assert f"test=x://{root}/test_links.py:3" in out
+    assert f"crash=x://{root}/test_links.py:5" in out
+
+
+def test_slowest_fixtures(pytester):
+    pytester.makepyfile(
+        test_fx="""
+        import time
+        import pytest
+
+        @pytest.fixture(scope="session")
+        def db():
+            time.sleep(0.3)
+            yield
+            time.sleep(0.15)
+
+        @pytest.fixture
+        def client(db):
+            time.sleep(0.03)
+
+        @pytest.mark.parametrize("i", range(4))
+        def test_a(client, i):
+            pass
+        """
+    )
+    _, out = run(pytester, "--glow")
+    assert "slowest fixtures" in out
+    # times only from below: a busy CI runner is slower, never faster
+    db = next(line for line in out.splitlines() if " db " in line)
+    assert "session · " in db
+    assert _seconds(re.search(r"setup (\S+),", db)[1]) >= 0.3
+    assert _seconds(re.search(r"teardown (\S+?)[ ·…]", db + " ")[1]) >= 0.15
+    client = next(line for line in out.splitlines() if " client " in line)
+    assert _seconds(re.search(r"×4, (\S+) each", client)[1]) >= 0.03
+    assert out.index(" db ") < out.index(" client ")
+
+
+def _seconds(shown):
+    return float(shown[:-2]) / 1000 if shown.endswith("ms") else float(shown[:-1])
+
+
+def test_no_fixture_section_for_quick_fixtures(pytester):
+    pytester.makepyfile("import pytest\n@pytest.fixture\ndef f(): pass\ndef test_a(f): pass\n")
+    _, out = run(pytester, "--glow")
+    assert "slowest fixtures" not in out
