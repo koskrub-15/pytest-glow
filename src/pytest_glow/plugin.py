@@ -55,6 +55,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         metavar="PATH",
         help="save the run as an SVG card to share (default: glow-card.svg); implies --glow",
     )
+    group.addoption(
+        "--glow-wrapped",
+        action="store_true",
+        default=False,
+        help="show everything glow remembers about this project (with --glow-share, save it as SVG) and exit",
+    )
     parser.addini("glow_boss", "fight the test suite as a boss", type="bool", default=False)
     parser.addini("glow_sound", "play a sound when the run ends", type="bool", default=False)
 
@@ -114,6 +120,29 @@ def _terminal_stream(force: bool):
     # Our own handle on the terminal: while tests run, fd capture points fd 1 at a
     # temp file, but the live view keeps refreshing in the background.
     return os.fdopen(os.dup(fd), "w", buffering=1, encoding=sys.stdout.encoding or "utf-8", errors="replace")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_cmdline_main(config: pytest.Config) -> int | None:
+    if not config.getoption("glow_wrapped", False):
+        return None
+    from _pytest.cacheprovider import Cache
+    from rich.console import Console
+
+    from . import wrapped
+    from .history import History
+
+    share = config.getoption("glow_share", None)
+    if share and not share.lower().endswith(".svg"):
+        raise pytest.UsageError(f"--glow-share writes SVG; give it a .svg path, not {share!r}")
+    history = History(Cache.for_config(config, _ispytest=True))
+    recap = wrapped.render_wrapped(history, config.rootpath.name)
+    console = Console(highlight=False, width=min(Console().width, 100))
+    console.print(recap)
+    if share:
+        wrapped.save(recap, share)
+        console.print(f"  ✦ saved {share}", style="dim", soft_wrap=True)
+    return 0
 
 
 @pytest.hookimpl(trylast=True)

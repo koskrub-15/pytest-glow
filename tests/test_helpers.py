@@ -436,3 +436,11 @@ def test_loot():
     assert loot_line(item, None).plain == "🎁 loot  🗡 Mutex of Destiny  rare"
     assert loot_line(item, ["🥄 Spoon of Mocking"]).plain.endswith("rare · new! · 2/16 collected")
     assert loot_line(item, ["🗡 Mutex of Destiny"]).plain.endswith("rare · 1/16 collected")
+
+
+def test_wrapped_quips():
+    from pytest_glow.wrapped import quip
+
+    assert quip(1.0, 0.5).startswith("Go to sleep")
+    assert quip(0.97, 0.0) == "Your CI fears you."
+    assert quip(0.1, 0.0) == "Your tests are more of a suggestion."
