@@ -438,3 +438,15 @@ def test_max_combo_in_the_verdict(pytester):
     )
     _, out = run(pytester, "--glow")
     assert "max combo ×30" in out
+
+
+def test_xdist_tracks_what_each_worker_runs(pytester):
+    pytest.importorskip("xdist")
+    pytester.makeconftest("""
+        def pytest_terminal_summary(terminalreporter):
+            done = getattr(terminalreporter, "_worker_done", {})
+            terminalreporter.write_line(f"workers={len(done)} finished={sum(done.values())}")
+    """)
+    pytester.makepyfile("import pytest\n@pytest.mark.parametrize('i', range(8))\ndef test_n(i): pass\n")
+    _, out = run(pytester, "--glow", "-n", "2")
+    assert "workers=2 finished=8" in out

@@ -43,6 +43,7 @@ REVEAL = 0.45  # seconds the final verdict takes to sweep in on a terminal
 CELEBRATE = 0.95  # seconds of confetti for a personal best or an achievement
 MAX_BLAMES = 10
 EASTER_EGGS = {69: "nice.", 67: "six seven 🤷"}
+MAX_WORKERS_SHOWN = 8
 COMBO_SHOWN = 10  # passes in a row before the live view starts counting a combo
 COMBO_BROKEN = 1.5  # seconds a broken combo stays on screen
 MAX_RERUN_IDS = 3  # beyond this, the rerun hint is `pytest --lf`
@@ -138,6 +139,10 @@ class GlowReporter(TerminalReporter):
         self._max_combo = 0
         self._combo_broken: tuple[int, float] | None = None  # (combo, when)
         self._oldest_blame: float | None = None
+        # under xdist: what each worker is running, and how many tests it has finished
+        self._worker_now: dict[str, tuple[str, float]] = {}
+        self._worker_done: Counter = Counter()
+        self._worker_spinners: dict[str, Spinner] = {}
         self._duration = 0.0
         self._new_pb: float | None = None  # the record this run just beat
         self._unlocked: list[ach.Achievement] = []
@@ -229,10 +234,32 @@ class GlowReporter(TerminalReporter):
         dsession = self.config.pluginmanager.get_plugin("dsession")
         if dsession is not None and hasattr(dsession, "terminal"):
             dsession.terminal = self
+        if dsession is not None:
+            # xdist relays logstart/logfinish without saying which worker sent them
+            for event in ("worker_logstart", "worker_logfinish"):
+                relay = getattr(dsession, event, None)
+                if callable(relay):
+                    setattr(dsession, event, self._tracking(relay, event == "worker_logstart"))
         trdist = self.config.pluginmanager.get_plugin("terminaldistreporter")
         if trdist is not None:
             trdist.tr = self
             trdist._isatty = True
+
+    def _tracking(self, relay, starting: bool):
+        def track(node: Any, **kw: Any) -> Any:
+            worker = str(getattr(getattr(node, "gateway", None), "id", ""))
+            nodeid = kw.get("nodeid", "")
+            if worker:
+                with self._lock:
+                    if starting:
+                        self._worker_now[worker] = (nodeid, time.monotonic())
+                    else:
+                        self._worker_done[worker] += 1
+                        if self._worker_now.get(worker, ("",))[0] == nodeid:
+                            del self._worker_now[worker]
+            return relay(node=node, **kw)
+
+        return track
 
     def pytest_report_header(self, config: pytest.Config) -> list[str]:
         return []
@@ -498,6 +525,9 @@ class GlowReporter(TerminalReporter):
                 parts.append(Text(f"  … {len(active) - MAX_ACTIVE_FILES} more files running", style="dim"))
 
             slow = sorted((t0, nodeid) for nodeid, t0 in self._running.items() if now - t0 >= SLOW_RUNNING)
+            if len(self._workers) > 1:
+                parts += [Text(""), *self._worker_lines(now)]
+                slow = []  # the worker lines already time what's running
             show_file = len(active) > 1
             for t0, nodeid in slow[:MAX_RUNNING_TESTS]:
                 elapsed = now - t0
@@ -868,6 +898,30 @@ class GlowReporter(TerminalReporter):
             )
         if len(slower) > 5:
             self._print(Text(f"     … and {len(slower) - 5} more slower than usual", style="dim"))
+
+    def _worker_lines(self, now: float) -> list[Text]:
+        lines = []
+        for worker in sorted(self._workers, key=lambda w: (len(w), w))[:MAX_WORKERS_SHOWN]:
+            spinner = self._worker_spinners.setdefault(worker, Spinner("dots", style="cyan"))
+            running = self._worker_now.get(worker)
+            line = Text.assemble("  ", (f"{worker:<4}", "bold"), " ")
+            if running is None:
+                line.append("·", style="dim")
+            else:
+                line.append_text(spinner.render(now))
+            line.append(f" {self._worker_done[worker]:>4} done  ", style="dim")
+            if running is None:
+                line.append("idle", style="dim")
+            else:
+                nodeid, t0 = running
+                elapsed = now - t0
+                st = "bold red" if elapsed >= 5 else "yellow" if elapsed >= 1 else "dim"
+                line.append_text(render.nodeid_text(nodeid))
+                line.append("  ⏱ " + render.fmt_clock(elapsed), style=st)
+            lines.append(line)
+        if len(self._workers) > MAX_WORKERS_SHOWN:
+            lines.append(Text(f"  … {len(self._workers) - MAX_WORKERS_SHOWN} more workers", style="dim"))
+        return lines
 
     def _combo_line(self, now: float) -> Text | None:
         broken = self._combo_broken
