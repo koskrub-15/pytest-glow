@@ -1,4 +1,7 @@
-"""Who last touched the line that failed, from git blame. Silent outside a git checkout."""
+"""What git knows: who last touched the line that failed, and what changed since a green run.
+
+Everything here is silent (returns None) outside a git checkout or when git is missing or slow.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +12,8 @@ from dataclasses import dataclass
 from functools import cache
 
 TIMEOUT = 2.0
+# what tools write while tests run, in case a project doesn't ignore it
+_NOISE_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis", ".tox", ".nox"}
 
 
 @dataclass
@@ -65,3 +70,35 @@ def describe(b: Blame, now: float | None = None) -> str:
         return "not committed yet — this one's all yours"
     who = "you" if b.yours else b.author
     return f"last touched by {who}, {ago((now or time.time()) - b.when)} · {b.commit}"
+
+
+def head(cwd: str) -> str | None:
+    out = _git(cwd, "rev-parse", "HEAD")
+    return out.strip() if out else None
+
+
+def changed_since(cwd: str, commit: str, since: float) -> list[str] | None:
+    """Files under cwd that differ from ``commit`` and were touched after ``since``, newest first.
+
+    The time filter drops edits that were already there, uncommitted, when ``commit`` was green.
+    """
+    tracked = _git(cwd, "diff", "--name-only", "--relative", commit)
+    if tracked is None:
+        return None
+    untracked = _git(cwd, "ls-files", "--others", "--exclude-standard") or ""
+    found: dict[str, float] = {}
+    for path in {*tracked.splitlines(), *untracked.splitlines()}:
+        if not path or _noise(path):
+            continue
+        try:
+            mtime = os.path.getmtime(os.path.join(cwd, path))
+        except OSError:
+            mtime = float("inf")  # deleted since
+        if mtime > since + 1:  # run times are kept to the second
+            found[path] = mtime
+    return sorted(found, key=lambda p: found[p], reverse=True)
+
+
+def _noise(path: str) -> bool:
+    parts = path.split("/")
+    return bool(_NOISE_DIRS.intersection(parts)) or parts[-1].startswith(".coverage") or path.endswith(".pyc")

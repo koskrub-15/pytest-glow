@@ -26,7 +26,7 @@ from . import __version__, render
 from . import achievements as ach
 from . import coverage as cov
 from . import diff as assert_diff
-from .blame import blame, describe
+from .blame import ago, blame, changed_since, describe, head
 from .history import History, is_flaky
 
 SUMMARY_EXIT_CODES = (
@@ -134,6 +134,7 @@ class GlowReporter(TerminalReporter):
         self._duration = 0.0
         self._new_pb: float | None = None  # the record this run just beat
         self._unlocked: list[ach.Achievement] = []
+        self._blamed_paths: set[str] = set()  # rootdir-relative files the failures point at
 
     # -- output plumbing ---------------------------------------------------------------
     # Other plugins (xdist, coverage, ...) write through the terminal reporter. While the
@@ -576,6 +577,7 @@ class GlowReporter(TerminalReporter):
             self._print_slowest()
             self._print_insights()
             self._print_achievements()
+            self._print_changes()
         if session.shouldfail:
             self._print(Text(f"  ! {session.shouldfail}", style="bold red"))
         elif session.shouldstop:
@@ -659,6 +661,7 @@ class GlowReporter(TerminalReporter):
             path = os.path.normpath(os.path.join(here, str(loc.path)))
             if not path.startswith(root + os.sep) or "site-packages" in path.split(os.sep):
                 continue
+            self._blamed_paths.add(os.path.relpath(path, root))
             found = blame(path, loc.lineno)
             if found is None:
                 return None
@@ -845,6 +848,40 @@ class GlowReporter(TerminalReporter):
             )
         if len(slower) > 5:
             self._print(Text(f"     … and {len(slower) - 5} more slower than usual", style="dim"))
+
+    def _print_changes(self) -> None:
+        """On a red run: what changed in git since the last green one."""
+        if not self._failing() or not self._history.enabled:
+            return
+        green = self._history.last_green()
+        if green is None:
+            return
+        root = str(self.config.rootpath)
+        changed = changed_since(root, green["g"], green.get("t", 0))
+        if changed is None:
+            return
+        when = ago(time.time() - green.get("t", time.time()))
+        self.console.print()
+        if not changed:
+            self._print(
+                Text.assemble(
+                    "  🔍 ",
+                    ("nothing changed", "bold"),
+                    (f" in git since the last green run, {when} — flaky, environment or data?", "dim"),
+                )
+            )
+            return
+        self._print(Text.assemble("  🔍 ", ("changed since the last green run", "bold"), (f", {when}", "dim")))
+        suspects = self._blamed_paths | {render.file_of(f.report.nodeid) for f in self._failures}
+        suspects |= {render.file_of(r.nodeid) for r in self._collect_errors if r.nodeid}
+        changed.sort(key=lambda p: p not in suspects)  # stable: the suspects first, newest first within
+        for path in changed[:8]:
+            line = Text("     ") + render.path_text(path)
+            if path in suspects:
+                line.append("  ← failing here", style="bold red")
+            self._print(line)
+        if len(changed) > 8:
+            self._print(Text(f"     … and {len(changed) - 8} more", style="dim"))
 
     def _rerun_command(self) -> str | None:
         """What to type to run just the failures again: their ids, or --lf when there are many."""
@@ -1054,5 +1091,6 @@ class GlowReporter(TerminalReporter):
         measured = None
         if self._coverage is not None:
             measured = (self._coverage.total, {f.path: f.percent for f in self._coverage.files})
-        self._history.record(results, self._duration, ok=not failing, failed=failing, coverage=measured)
+        commit = head(str(self.config.rootpath)) if not failing else None
+        self._history.record(results, self._duration, ok=not failing, failed=failing, coverage=measured, commit=commit)
         self._history.save()
