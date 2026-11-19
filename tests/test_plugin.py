@@ -339,3 +339,10 @@ def test_short_tracebacks_keep_pytest_text(pytester):
     assert "Differing items" in out
     assert "test_payload  role: 'user' → 'admin'" in out
     assert "+ right" not in out
+
+
+def test_assertion_temporaries_stay_hidden_without_a_diff(pytester):
+    pytester.makepyfile(test_t="def test_t():\n    data = {'a': 1}\n    assert not data.get('a')\n")
+    _, out = run(pytester, "--glow")
+    assert "data = {'a': 1}" in out
+    assert "@py_assert" not in out

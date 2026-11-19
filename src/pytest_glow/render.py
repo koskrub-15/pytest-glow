@@ -243,11 +243,11 @@ def rich_traceback(excinfo, width: int, *, brief: bool = False):
     )
     for stack in trace.stacks:
         stack.exc_value = plain(stack.exc_value)
-    if brief and trace.stacks:
-        trace.stacks[0].exc_value = trace.stacks[0].exc_value.split("\n", 1)[0]
         for frame in stack.frames:
             if frame.locals:
                 frame.locals = {k: v for k, v in frame.locals.items() if not k.startswith("@")}
+    if brief and trace.stacks:
+        trace.stacks[0].exc_value = trace.stacks[0].exc_value.split("\n", 1)[0]
     return Traceback(
         trace,
         width=width,
