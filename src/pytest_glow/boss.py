@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import zlib
 from dataclasses import dataclass
 
@@ -24,6 +25,52 @@ BOSSES: dict[str, list[str]] = {
 }
 HP_BAR = ("#7f1d1d", "#ef4444", "#f97316")
 BODY = ("#a855f7", "#ec4899")
+# phases: below half its HP the boss is enraged, below a tenth it makes its last stand
+ENRAGED, LAST_STAND = 0.5, 0.1
+PHASES = (
+    # (name, body colours, eyes)
+    (None, BODY, "●"),
+    ("🔥 ENRAGED", ("#f97316", "#dc2626"), "◆"),
+    ("💫 LAST STAND", ("#9ca3af", "#ef4444"), "✖"),
+)
+# what a slain boss drops: (name, rarity); rarities by weight
+LOOT = (
+    ("🥄 Spoon of Mocking", "common"),
+    ("🧦 Sock of Fixtures", "common"),
+    ("🪵 Stick of Retry", "common"),
+    ("📎 Paperclip of Asserts", "common"),
+    ("🧂 Salt of Seeds", "common"),
+    ("🗡 Mutex of Destiny", "rare"),
+    ("🛡 Shield of Type Hints", "rare"),
+    ("🧪 Flask of Determinism", "rare"),
+    ("🔮 Orb of Repro", "rare"),
+    ("🪓 Axe of Bisect", "epic"),
+    ("📜 Scroll of Green CI", "epic"),
+    ("🧲 Magnet of Coverage", "epic"),
+    ("⏳ Hourglass of Timeouts", "epic"),
+    ("👑 Crown of Zero Flakes", "legendary"),
+    ("⚱ Urn of Legacy Code", "legendary"),
+    ("🌈 The Rainbow Bar", "legendary"),
+)
+RARITY = {"common": (60, "#d1d5db"), "rare": (28, "#60a5fa"), "epic": (10, "#c084fc"), "legendary": (2, "#facc15")}
+
+
+def drop(rng: random.Random | None = None) -> tuple[str, str]:
+    rng = rng or random.Random()
+    rarity = rng.choices(list(RARITY), weights=[w for w, _ in RARITY.values()])[0]
+    return rng.choice([item for item in LOOT if item[1] == rarity])
+
+
+def loot_line(item: tuple[str, str], collected: list[str] | None) -> Text:
+    """'🎁 loot  🗡 Mutex of Destiny  rare · new! · 3/16 collected'."""
+    name, rarity = item
+    line = Text.assemble("🎁 ", ("loot  ", "dim"), (name, f"bold {RARITY[rarity][1]}"), (f"  {rarity}", "dim"))
+    if collected is not None:
+        if name not in collected:
+            line.append(" · new!", style="bold #facc15")
+            collected = [*collected, name]
+        line.append(f" · {len(collected)}/{len(LOOT)} collected", style="dim")
+    return line
 
 
 @dataclass
@@ -39,9 +86,12 @@ class Fight:
         name = names[zlib.crc32(project.encode()) % len(names)]
         return cls(name, BOSSES[name], hp)
 
-    def eyes(self, left: int) -> str:
+    def phase(self, left: int) -> int:
         share = left / self.hp if self.hp else 0
-        return "●" if share > 0.5 else "◦" if share > 0.2 else "✖"
+        return 0 if share > ENRAGED else 1 if share > LAST_STAND else 2
+
+    def eyes(self, left: int) -> str:
+        return PHASES[self.phase(left)][2]
 
     def sprite_text(self, left: int, heat: float, jolt: bool = False) -> Text:
         """``heat`` (0-1): how fresh the last hit is; under a barrage the boss stays pale but keeps its colour."""
@@ -50,7 +100,8 @@ class Fight:
         for i, line in enumerate(self.sprite):
             line = line.replace("{e}", self.eyes(left)).ljust(width)
             line = (" " + line) if jolt and i % 2 == 0 else (line + " ")
-            color = render.blend(render.gradient_at(BODY, i / max(len(self.sprite) - 1, 1)), "#ffffff", heat * 0.5)
+            body = PHASES[self.phase(left)][1]
+            color = render.blend(render.gradient_at(body, i / max(len(self.sprite) - 1, 1)), "#ffffff", heat * 0.5)
             text.append(line, style=f"bold {color}" if heat > 0.5 else color)
             if i < len(self.sprite) - 1:
                 text.append("\n")
@@ -69,7 +120,11 @@ def arena(fight: Fight, left: int, wounds: int, now: float, last_hit: float | No
     grid = Table.grid(padding=(0, 2), expand=True)
     grid.add_column(no_wrap=True)
     grid.add_column(ratio=1)
-    title = Text.assemble("👹 ", render.gradient_text(fight.name.upper(), BODY), (f"   HP {left}/{fight.hp}", "dim"))
+    phase, body, _ = PHASES[fight.phase(left)]
+    title = Text.assemble("👹 ", render.gradient_text(fight.name.upper(), body), (f"   HP {left}/{fight.hp}", "dim"))
+    if phase and left:
+        title.append("   ")
+        title.append_text(render.gradient_text(phase, render.GRADIENTS["fire"] if "ENRAGED" in phase else HP_BAR))
     you = Text.assemble("🧙 you  ", hearts(wounds))
     if wounds >= HEARTS:
         you.append("  knocked out, still swinging", style="dim")

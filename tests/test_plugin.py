@@ -632,3 +632,18 @@ def test_red_runs_are_never_shiny(pytester):
     _, out = run(pytester, "--glow")
     assert "SHINY" not in out
     assert "FAILED" in out
+
+
+def test_a_slain_boss_drops_loot(pytester):
+    pytester.makepyfile("def test_a(): pass\n")
+    _, out = run(pytester, "--glow", "--glow-boss")
+    assert "🎁 loot  " in out
+    assert "new! · 1/16 collected" in out
+    _, out = run(pytester, "--glow", "--glow-boss")
+    assert re.search(r"· [12]/16 collected", out)
+
+
+def test_no_loot_when_the_boss_survives(pytester):
+    pytester.makepyfile("def test_a(): assert 0\n")
+    _, out = run(pytester, "--glow", "--glow-boss")
+    assert "🎁" not in out

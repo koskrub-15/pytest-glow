@@ -1,3 +1,4 @@
+import os
 from collections import Counter
 
 import pytest
@@ -203,7 +204,7 @@ def test_boss_eyes_weaken():
     from pytest_glow.boss import Fight
 
     fight = Fight.for_project("x", hp=10)
-    assert [fight.eyes(left) for left in (10, 4, 1)] == ["●", "◦", "✖"]
+    assert [fight.eyes(left) for left in (10, 4, 1)] == ["●", "◆", "✖"]
     sprite = fight.sprite_text(1, heat=0).plain
     assert "✖" in sprite
     assert len(set(map(len, sprite.split("\n")))) == 1  # rows line up
@@ -403,3 +404,35 @@ def test_lifetime_tally():
     assert life["loot"] == ["🥄 Spoon"]
     assert life["best_combo"] == 12 and life["best_streak"] == 1
     assert h.xp == 90
+
+
+def test_boss_phases_in_the_arena():
+    from rich.console import Console
+
+    from pytest_glow.boss import Fight, arena
+
+    def shown(left):
+        console = Console(width=100, record=True, file=open(os.devnull, "w"))  # noqa: SIM115
+        console.print(arena(Fight.for_project("x", hp=100), left, 0, 0.0, None, 0))
+        return console.export_text()
+
+    assert "ENRAGED" not in shown(60) and "LAST STAND" not in shown(60)
+    assert "🔥 ENRAGED" in shown(50)
+    assert "💫 LAST STAND" in shown(10)
+
+
+def test_loot():
+    import random
+
+    from pytest_glow.boss import LOOT, RARITY, drop, loot_line
+
+    rng = random.Random(1)
+    drops = [drop(rng) for _ in range(2000)]
+    assert set(drops) <= set(LOOT)
+    share = {r: sum(1 for _, rarity in drops if rarity == r) / len(drops) for r in RARITY}
+    assert share["common"] > share["rare"] > share["epic"] > share["legendary"] > 0
+
+    item = ("🗡 Mutex of Destiny", "rare")
+    assert loot_line(item, None).plain == "🎁 loot  🗡 Mutex of Destiny  rare"
+    assert loot_line(item, ["🥄 Spoon of Mocking"]).plain.endswith("rare · new! · 2/16 collected")
+    assert loot_line(item, ["🗡 Mutex of Destiny"]).plain.endswith("rare · 1/16 collected")

@@ -29,7 +29,7 @@ from . import achievements as ach
 from . import coverage as cov
 from . import diff as assert_diff
 from .blame import ago, blame, changed_since, describe, head
-from .boss import HEARTS, Fight, arena, outcome
+from .boss import HEARTS, Fight, arena, drop, loot_line, outcome
 from .history import History, is_flaky
 from .plugin import flag
 
@@ -190,6 +190,8 @@ class GlowReporter(TerminalReporter):
         self._combo_broken: tuple[int, float] | None = None  # (combo, when)
         self._oldest_blame: float | None = None
         self._shiny = False
+        self._boss_phase = 0
+        self._loot: tuple[str, str] | None = None
         self._xp: tuple[int, int] | None = None  # (XP before this run, XP it earned)
         self._fixed = 0
         self._fight = Fight.for_project(config.rootpath.name) if flag(config, "boss") else None
@@ -560,6 +562,13 @@ class GlowReporter(TerminalReporter):
             player.play("combo_breaker")
         elif self._fight is not None:
             player.hit(crit=combo >= COMBO_SHOWN)
+        if self._fight is not None:
+            hp = max(self._total, self._done)
+            left = hp - self._hits()
+            phase = Fight(self._fight.name, self._fight.sprite, hp).phase(left)
+            if phase > self._boss_phase and left > 0:
+                player.play("roar")
+            self._boss_phase = max(phase, self._boss_phase)
 
     def _file_line(self, fs: FileState, now: float | None = None) -> Text:
         live = now is not None
@@ -736,6 +745,8 @@ class GlowReporter(TerminalReporter):
         self._shiny = bool(
             self._done and not self._failing() and exitstatus == pytest.ExitCode.OK and random.random() < SHINY_ODDS
         )
+        if self._boss_won() and exitstatus == pytest.ExitCode.OK:
+            self._loot = drop()
         self._celebrations(exitstatus)
         if show:
             self._print_slowest()
@@ -1348,6 +1359,9 @@ class GlowReporter(TerminalReporter):
                     exitstatus == pytest.ExitCode.INTERRUPTED,
                 )
             )
+            if self._loot is not None:
+                collected = list(self._history.life.get("loot", [])) if self._history.enabled else None
+                lines.append(loot_line(self._loot, collected))
         coverage_line = self._coverage_line()
         if coverage_line is not None:
             lines.append(coverage_line)
@@ -1475,5 +1489,6 @@ class GlowReporter(TerminalReporter):
             fixed=self._fixed,
             shiny=self._shiny,
             boss=None if self._fight is None else "won" if self._boss_won() else "lost",
+            loot=self._loot[0] if self._loot else None,
         )
         self._history.save()

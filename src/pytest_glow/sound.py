@@ -18,7 +18,7 @@ import wave
 from collections.abc import Callable
 
 RATE = 22050
-REVISION = 4  # bump when a sound changes, so the cached files get rebuilt
+REVISION = 5  # bump when a sound changes, so the cached files get rebuilt
 HIT_GAP = 0.12  # at most this often a hit sound, or a fast suite turns into a drum roll
 COMBO_MILESTONES = (10, 25, 50, 100, 250, 500, 1000)
 
@@ -189,6 +189,12 @@ def crit() -> Samples:
     return mix(hit(), seq(rest(0.02), tone(note("E6"), 0.07, "pulse", 0.12, to=note("B6"), cutoff=None)))
 
 
+def roar() -> Samples:
+    """The boss enters a new phase."""
+    growl = tone(120, 0.7, "saw", 0.4, to=65, vibrato=0.06, attack=0.05, release=0.25, cutoff=650)
+    return mix(growl, noise(0.7, 0.18, decay=3, cutoff=500, seed=5))
+
+
 def hurt() -> Samples:
     """The boss hits you."""
     return mix(tone(480, 0.16, "square", 0.25, to=180, cutoff=1800), noise(0.1, 0.25, decay=25, cutoff=1500))
@@ -226,6 +232,7 @@ SOUNDS: dict[str, Callable[[], Samples]] = {
     "hit": hit,
     "crit": crit,
     "hurt": hurt,
+    "roar": roar,
     "boss_down": boss_down,
     "game_over": game_over,
     **{f"combo{level}": (lambda level=level: combo(level)) for level in range(len(COMBO_MILESTONES))},
