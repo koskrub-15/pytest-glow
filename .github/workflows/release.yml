@@ -1,0 +1,41 @@
+name: Release
+
+# Publishing a GitHub release builds the package and uploads it to PyPI with trusted publishing:
+# no tokens, PyPI trusts this workflow (set up once at pypi.org → Publishing).
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Check the tag matches the version
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/pytest_glow/__init__.py)
+          test "v$version" = "${{ github.event.release.tag_name }}" || {
+            echo "tag ${{ github.event.release.tag_name }} does not match version $version"; exit 1; }
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/pytest-glow/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
