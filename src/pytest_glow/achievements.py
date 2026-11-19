@@ -27,6 +27,7 @@ ALL = [
     Achievement("archaeologist", "Archaeologist", "a failure on a line nobody touched for 5+ years"),
     Achievement("glass_cannon", "Glass Cannon", "100% coverage, and still red"),
     Achievement("unstoppable", "Unstoppable", "a 100-test combo"),
+    Achievement("shiny_hunter", "Shiny Hunter", "a 1-in-500 shiny run"),
     Achievement("boss_slayer", "Boss Slayer", "won a --glow-boss fight against 100+ HP without a scratch"),
 ]
 YEAR = 365 * 86400
@@ -51,6 +52,7 @@ class RunFacts:
     oldest_blame: float | None = None  # age in seconds of the oldest line a failure was blamed on
     max_combo: int = 0
     boss_slain: bool = False
+    shiny: bool = False
 
 
 def earned(facts: RunFacts) -> list[Achievement]:
@@ -75,5 +77,6 @@ def earned(facts: RunFacts) -> list[Achievement]:
         "glass_cannon": not facts.ok and facts.coverage_total is not None and facts.coverage_total >= 100,
         "unstoppable": facts.max_combo >= 100,
         "boss_slayer": facts.boss_slain,
+        "shiny_hunter": facts.shiny,
     }
     return [a for a in ALL if hits.get(a.key)]

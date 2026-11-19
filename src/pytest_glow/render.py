@@ -280,6 +280,7 @@ GRADIENTS: dict[str, tuple[str, ...]] = {
     "cyan": ("#0891b2", "#22d3ee", "#a5f3fc"),
     "grey50": ("#4b5563", "#9ca3af"),
     "fire": ("#facc15", "#f97316", "#ef4444"),
+    "gold": ("#fef3c7", "#facc15", "#f59e0b", "#fde68a"),
 }
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import os
 import platform
+import random
 import re
 import shlex
 import threading
@@ -23,12 +24,12 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, hang, render, share, sound
+from . import __version__, hang, progress, render, share, sound
 from . import achievements as ach
 from . import coverage as cov
 from . import diff as assert_diff
 from .blame import ago, blame, changed_since, describe, head
-from .boss import HEARTS, Fight, arena, outcome
+from .boss import HEARTS, Fight, arena, drop, loot_line, outcome
 from .history import History, is_flaky
 from .plugin import flag
 
@@ -50,6 +51,7 @@ MAX_WORKERS_SHOWN = 8
 COMBO_SHOWN = 10  # passes in a row before the live view starts counting a combo
 COMBO_BROKEN = 1.5  # seconds a broken combo stays on screen
 MAX_RERUN_IDS = 3  # beyond this, the rerun hint is `pytest --lf`
+SHINY_ODDS = 1 / 500  # the chance that a green run comes out shiny
 SLOWER = 2.0  # a test this many times its usual duration (and 100ms more) is called out
 
 
@@ -187,6 +189,11 @@ class GlowReporter(TerminalReporter):
         self._max_combo = 0
         self._combo_broken: tuple[int, float] | None = None  # (combo, when)
         self._oldest_blame: float | None = None
+        self._shiny = False
+        self._boss_phase = 0
+        self._loot: tuple[str, str] | None = None
+        self._xp: tuple[int, int] | None = None  # (XP before this run, XP it earned)
+        self._fixed = 0
         self._fight = Fight.for_project(config.rootpath.name) if flag(config, "boss") else None
         self._last_hit: float | None = None
         # sound only in an interactive terminal: never in CI or a pipe
@@ -555,6 +562,13 @@ class GlowReporter(TerminalReporter):
             player.play("combo_breaker")
         elif self._fight is not None:
             player.hit(crit=combo >= COMBO_SHOWN)
+        if self._fight is not None:
+            hp = max(self._total, self._done)
+            left = hp - self._hits()
+            phase = Fight(self._fight.name, self._fight.sprite, hp).phase(left)
+            if phase > self._boss_phase and left > 0:
+                player.play("roar")
+            self._boss_phase = max(phase, self._boss_phase)
 
     def _file_line(self, fs: FileState, now: float | None = None) -> Text:
         live = now is not None
@@ -728,6 +742,11 @@ class GlowReporter(TerminalReporter):
                 session.exitstatus = pytest.ExitCode.MAX_WARNINGS_ERROR
                 self._print(Text(f"Tests pass, but maximum allowed warnings exceeded: {n} > {max_warnings}", "red"))
         self._duration = time.monotonic() - self._t_start
+        self._shiny = bool(
+            self._done and not self._failing() and exitstatus == pytest.ExitCode.OK and random.random() < SHINY_ODDS
+        )
+        if self._boss_won() and exitstatus == pytest.ExitCode.OK:
+            self._loot = drop()
         self._celebrations(exitstatus)
         if show:
             self._print_slowest()
@@ -1213,6 +1232,7 @@ class GlowReporter(TerminalReporter):
             oldest_blame=self._oldest_blame,
             max_combo=self._max_combo,
             boss_slain=self._fight is not None and ok and self._done >= 100,
+            shiny=self._shiny,
             counts=Counter(self._counts),
             done=self._done,
             warnings=len(self.stats.get("warnings", [])),
@@ -1230,6 +1250,25 @@ class GlowReporter(TerminalReporter):
             if a.key not in history.achievements:
                 history.achievements[a.key] = now
                 self._unlocked.append(a)
+        self._fixed = sum(1 for streak in fixed_streaks if streak)
+        gained = progress.xp_for(
+            passed=self._counts.get("passed", 0),
+            ok=ok,
+            max_combo=self._max_combo,
+            fixed=self._fixed,
+            boss_won=self._boss_won(),
+            shiny=self._shiny,
+        )
+        self._xp = (history.xp, gained)
+
+    def _boss_won(self) -> bool:
+        return self._fight is not None and self._done > 0 and not self._failing()
+
+    def _leveled_up(self) -> bool:
+        if self._xp is None:
+            return False
+        before, gained = self._xp
+        return progress.level_of(before + gained)[0] > progress.level_of(before)[0]
 
     def _print_achievements(self) -> None:
         if not self._unlocked:
@@ -1258,6 +1297,9 @@ class GlowReporter(TerminalReporter):
             icon, word, st = "∅", "no tests ran", "grey50"
         else:
             icon, word, st = "✓", "all green", "green"
+        ok = word == "all green"
+        if ok and self._shiny:
+            icon, word, st = "✦", "shiny ✦", "gold"
 
         duration = self._duration
         counts = Counter(self._counts)
@@ -1275,8 +1317,12 @@ class GlowReporter(TerminalReporter):
         egg = EASTER_EGGS.get(counts.get("passed", 0))
         if egg:
             line1.append(f"  {egg}", style="dim italic")
+        if self._shiny:
+            line1.append("  a 1-in-500 run ✨", style="italic #fde68a")
         inner = max(10, self.console.width - 4)
         bar = render.proportion_bar(counts, inner) if counts else Text("━" * inner, style="grey30")
+        if self._shiny:
+            bar = render.glow_bar(1, 1, inner, stops)
 
         line3 = Text.assemble(("⏱ ", "dim"), (render.fmt_dur(duration), "bold"))
         prev = self._history.last_comparable_run(self._done) if self._done else None
@@ -1313,11 +1359,13 @@ class GlowReporter(TerminalReporter):
                     exitstatus == pytest.ExitCode.INTERRUPTED,
                 )
             )
+            if self._loot is not None:
+                collected = list(self._history.life.get("loot", [])) if self._history.enabled else None
+                lines.append(loot_line(self._loot, collected))
         coverage_line = self._coverage_line()
         if coverage_line is not None:
             lines.append(coverage_line)
         if self._history.enabled and self._done and exitstatus != pytest.ExitCode.INTERRUPTED:
-            ok = word == "all green"
             runs = [*self._history.runs[-23:], {"d": duration, "ok": ok}]
             line4 = Text.assemble(("runs ", "dim"), render.sparkline(runs))
             streak = self._history.green_streak()
@@ -1330,6 +1378,8 @@ class GlowReporter(TerminalReporter):
             elif not self._history.runs:
                 line4.append("  first run here — history starts now", style="dim")
             lines.append(line4)
+            if self._xp is not None:
+                lines.append(progress.xp_line(*self._xp))
 
         self.console.print()
         if self._failures and not getattr(self, "no_summary", False):
@@ -1366,7 +1416,7 @@ class GlowReporter(TerminalReporter):
 
         if self._live_enabled and not os.environ.get("CI"):
             confetti = None
-            if self._new_pb is not None or self._unlocked:
+            if self._new_pb is not None or self._unlocked or self._leveled_up() or self._shiny:
                 confetti = render.Confetti(self.console.width)
             length = CELEBRATE if confetti else REVEAL
 
@@ -1396,6 +1446,10 @@ class GlowReporter(TerminalReporter):
                 return "boss_down"
         if failing:
             return "sad_trombone"
+        if self._shiny:
+            return "shiny"
+        if self._leveled_up():
+            return "level_up"
         return "airhorn" if self._new_pb or self._unlocked else "level_clear"
 
     def _save_card(self, icon: str, word: str, stops: tuple, counts: Counter, details: list) -> None:
@@ -1425,4 +1479,16 @@ class GlowReporter(TerminalReporter):
             measured = (self._coverage.total, {f.path: f.percent for f in self._coverage.files})
         commit = head(str(self.config.rootpath)) if not failing else None
         self._history.record(results, self._duration, ok=not failing, failed=failing, coverage=measured, commit=commit)
+        self._history.tally(
+            ok=not failing,
+            counts=dict(self._counts),
+            duration=self._duration,
+            hour=self._hour,
+            xp=self._xp[1] if self._xp else 0,
+            max_combo=self._max_combo,
+            fixed=self._fixed,
+            shiny=self._shiny,
+            boss=None if self._fight is None else "won" if self._boss_won() else "lost",
+            loot=self._loot[0] if self._loot else None,
+        )
         self._history.save()

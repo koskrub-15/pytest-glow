@@ -18,7 +18,7 @@ import wave
 from collections.abc import Callable
 
 RATE = 22050
-REVISION = 2  # bump when a sound changes, so the cached files get rebuilt
+REVISION = 5  # bump when a sound changes, so the cached files get rebuilt
 HIT_GAP = 0.12  # at most this often a hit sound, or a fast suite turns into a drum roll
 COMBO_MILESTONES = (10, 25, 50, 100, 250, 500, 1000)
 
@@ -120,6 +120,27 @@ def level_clear() -> Samples:
     return mix(seq(run, chord), bass)
 
 
+def level_up() -> Samples:
+    """A level up: two climbing runs and a ringing chord on top."""
+    first = [tone(note(n), 0.06, "pulse", 0.22) for n in ("G4", "C5", "E5", "G5")]
+    second = [tone(note(n), 0.06, "pulse", 0.22) for n in ("A4", "D5", "F#5", "A5")]
+    ring = mix(
+        *(tone(note(n), 0.7, "square", 0.09, vibrato=0.006, release=0.45) for n in ("D6", "F#6", "A6")),
+        tone(note("D3"), 0.7, "tri", 0.35, release=0.45, cutoff=None),
+    )
+    return seq(*first, rest(0.03), *second, ring)
+
+
+def shiny() -> Samples:
+    """A shiny run: a sparkle up and down, then a shimmer."""
+    up = [tone(note(n), 0.05, "pulse", 0.18) for n in ("E6", "G#6", "B6", "E7")]
+    down = [tone(note(n), 0.05, "tri", 0.2, cutoff=None) for n in ("B6", "G#6", "B6", "E7")]
+    shimmer = mix(
+        *(tone(note(n), 0.9, "tri", 0.12, vibrato=0.01, release=0.7, cutoff=None) for n in ("E6", "B6", "E7"))
+    )
+    return seq(*up, *down, shimmer)
+
+
 def sad_trombone() -> Samples:
     """A red run: wah, wah, wah, waaaah."""
     wahs = [
@@ -168,6 +189,12 @@ def crit() -> Samples:
     return mix(hit(), seq(rest(0.02), tone(note("E6"), 0.07, "pulse", 0.12, to=note("B6"), cutoff=None)))
 
 
+def roar() -> Samples:
+    """The boss enters a new phase."""
+    growl = tone(120, 0.7, "saw", 0.4, to=65, vibrato=0.06, attack=0.05, release=0.25, cutoff=650)
+    return mix(growl, noise(0.7, 0.18, decay=3, cutoff=500, seed=5))
+
+
 def hurt() -> Samples:
     """The boss hits you."""
     return mix(tone(480, 0.16, "square", 0.25, to=180, cutoff=1800), noise(0.1, 0.25, decay=25, cutoff=1500))
@@ -197,12 +224,15 @@ def game_over() -> Samples:
 
 SOUNDS: dict[str, Callable[[], Samples]] = {
     "level_clear": level_clear,
+    "level_up": level_up,
+    "shiny": shiny,
     "sad_trombone": sad_trombone,
     "airhorn": airhorn,
     "combo_breaker": combo_breaker,
     "hit": hit,
     "crit": crit,
     "hurt": hurt,
+    "roar": roar,
     "boss_down": boss_down,
     "game_over": game_over,
     **{f"combo{level}": (lambda level=level: combo(level)) for level in range(len(COMBO_MILESTONES))},

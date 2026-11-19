@@ -601,3 +601,75 @@ def test_no_fixture_section_for_quick_fixtures(pytester):
     pytester.makepyfile("import pytest\n@pytest.fixture\ndef f(): pass\ndef test_a(f): pass\n")
     _, out = run(pytester, "--glow")
     assert "slowest fixtures" not in out
+
+
+def test_xp_and_level_up(pytester):
+    pytester.makepyfile("import pytest\n@pytest.mark.parametrize('i', range(80))\ndef test_a(i): pass\n")
+    _, out = run(pytester, "--glow")
+    assert "⬆ LEVEL UP  Lv 2 · Print Debugger  +121 XP" in out  # 80 passed, green, combo ×80
+    pytester.makepyfile("def test_a(): pass\n")
+    _, out = run(pytester, "--glow")
+    assert "✦ +26 XP  Lv 2 Print Debugger" in out
+    assert "47/150" in out
+
+
+SHINY = "import pytest_glow.reporter\npytest_glow.reporter.SHINY_ODDS = 1.0\n"
+
+
+def test_shiny_run(pytester):
+    pytester.makeconftest(SHINY)
+    pytester.makepyfile("def test_a(): pass\n")
+    _, out = run(pytester, "--glow")
+    assert "✦ SHINY ✦" in out
+    assert "a 1-in-500 run" in out
+    assert "Shiny Hunter" in out
+    assert "+276 XP" in out  # 1 passed + 25 for green + 250 for shiny
+
+
+def test_red_runs_are_never_shiny(pytester):
+    pytester.makeconftest(SHINY)
+    pytester.makepyfile("def test_a(): assert 0\n")
+    _, out = run(pytester, "--glow")
+    assert "SHINY" not in out
+    assert "FAILED" in out
+
+
+def test_a_slain_boss_drops_loot(pytester):
+    pytester.makepyfile("def test_a(): pass\n")
+    _, out = run(pytester, "--glow", "--glow-boss")
+    assert "🎁 loot  " in out
+    assert "new! · 1/16 collected" in out
+    _, out = run(pytester, "--glow", "--glow-boss")
+    assert re.search(r"· [12]/16 collected", out)
+
+
+def test_no_loot_when_the_boss_survives(pytester):
+    pytester.makepyfile("def test_a(): assert 0\n")
+    _, out = run(pytester, "--glow", "--glow-boss")
+    assert "🎁" not in out
+
+
+def test_wrapped(pytester):
+    _, out = run(pytester, "--glow-wrapped")
+    assert "no history here yet" in out
+
+    pytester.makepyfile(
+        "import pytest\n"
+        "@pytest.mark.parametrize('i', range(12))\n"
+        "def test_a(i): pass\n"
+        "def test_slow():\n"
+        "    import time; time.sleep(0.12)\n"
+    )
+    for _ in range(3):
+        run(pytester, "--glow", "--glow-boss")
+    result, out = run(pytester, "--glow-wrapped", "--glow-share", "recap.svg")
+    assert result.ret == 0
+    assert "YOUR PYTEST WRAPPED" in out
+    assert "3 runs" in out and "39 tests" in out and "100% green" in out
+    assert "Lv 3 Assert Apprentice" in out and "420 XP" in out  # 3 × (13 passed + 25 green + 2 combo + 100 boss)
+    assert re.search(r"longest green streak +3 runs", out)
+    assert re.search(r"best combo +×13", out)
+    assert "test_wrapped.py::test_slow" in out
+    assert "👹 3 won · 0 lost" in out
+    assert "collected" not in out  # nothing ran: no verdict
+    assert (pytester.path / "recap.svg").read_text().startswith("<svg")
