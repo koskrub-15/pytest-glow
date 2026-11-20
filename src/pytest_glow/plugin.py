@@ -72,6 +72,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "(also PYTEST_GLOW_RERUN=N or glow_rerun = N in the ini)",
     )
     group.addoption(
+        "--glow-watch",
+        action="store_true",
+        default=False,
+        help="rerun the tests on every save, what failed and what changed first; enter reruns all, q quits",
+    )
+    group.addoption(
         "--glow-wrapped",
         action="store_true",
         default=False,
@@ -143,6 +149,15 @@ def _terminal_stream(force: bool):
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_cmdline_main(config: pytest.Config) -> int | None:
+    if config.getoption("glow_watch", False):
+        from . import watch
+
+        # pytest captures stdin from the start: the keys, and breakpoint() in the runs, need the real one back
+        capture = config.pluginmanager.get_plugin("capturemanager")
+        if capture is not None:
+            capture.stop_global_capturing()
+        params = config.invocation_params
+        return watch.main(params.args, str(params.dir), str(config.rootpath))
     if not config.getoption("glow_wrapped", False):
         return None
     from _pytest.cacheprovider import Cache

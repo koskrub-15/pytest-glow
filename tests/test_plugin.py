@@ -799,3 +799,48 @@ def test_glow_rerun_rejects_nonsense(pytester):
     result = pytester.runpytest_subprocess("--glow-rerun=lots")
     assert result.ret == pytest.ExitCode.USAGE_ERROR
     assert "takes a number of reruns" in result.stderr.str()
+
+
+def test_glow_watch(pytester):
+    import queue
+    import subprocess
+    import sys
+    import threading
+
+    pytester.makepyfile(calc="def add(a, b):\n    return a - b\n")
+    pytester.makepyfile(test_calc="from calc import add\n\ndef test_add():\n    assert add(2, 2) == 4\n")
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "pytest", "--glow-watch", "-p", "no:randomly"],
+        cwd=pytester.path,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+    )
+    lines: queue.Queue = queue.Queue()
+    threading.Thread(target=lambda: [lines.put(line) for line in proc.stdout], daemon=True).start()
+
+    def until(word):
+        seen = []
+        while True:
+            line = lines.get(timeout=30)
+            seen.append(ANSI.sub("", line))
+            if word in line:
+                return "".join(seen)
+
+    try:
+        first = until("watching")
+        assert "glow watch · run 1" in first and "1 failed" in first
+        (pytester.path / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+        second = until("watching")
+        assert "run 2 · changed calc.py" in second
+        assert "1 passed" in second
+        proc.stdin.write("\n")
+        proc.stdin.flush()
+        assert "run 3" in until("watching")
+        proc.stdin.write("q\n")
+        proc.stdin.flush()
+        assert proc.wait(timeout=30) == 0
+    finally:
+        proc.kill()
