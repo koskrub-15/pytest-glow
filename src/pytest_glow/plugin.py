@@ -61,6 +61,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="show everything glow remembers about this project (with --glow-share, save it as SVG) and exit",
     )
+    parser.addini("glow_summary", "on GitHub Actions, write a job summary of the run", type="bool", default=True)
     parser.addini("glow_boss", "fight the test suite as a boss", type="bool", default=False)
     parser.addini("glow_sound", "play a sound when the run ends", type="bool", default=False)
 
@@ -150,6 +151,11 @@ def pytest_configure(config: pytest.Config) -> None:
     share = config.getoption("glow_share", None)
     if share and not share.lower().endswith(".svg"):
         raise pytest.UsageError(f"--glow-share writes SVG; give it a .svg path, not {share!r}")
+    from . import summary
+
+    path = summary.wanted(config)
+    if path:
+        config.pluginmanager.register(summary.JobSummary(config, path), "glow-summary")
     wanted = _wanted(config)
     if wanted is False or not _compatible(config):
         return

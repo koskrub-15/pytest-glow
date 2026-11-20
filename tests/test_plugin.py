@@ -673,3 +673,46 @@ def test_wrapped(pytester):
     assert "👹 3 won · 0 lost" in out
     assert "collected" not in out  # nothing ran: no verdict
     assert (pytester.path / "recap.svg").read_text().startswith("<svg")
+
+
+def test_github_job_summary(pytester, monkeypatch):
+    summary = pytester.path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "me/app")
+    monkeypatch.setenv("GITHUB_SHA", "abc123")
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(pytester.path))
+    pytester.makepyfile(
+        "import pytest\n"
+        "@pytest.fixture\n"
+        "def db():\n"
+        "    raise ConnectionError('no db')\n"
+        "def test_ok(): pass\n"
+        "def test_payload(): assert {'role': 'user', 'id': 1} == {'role': 'admin', 'id': 1}\n"
+        "def test_a(db): pass\n"
+        "def test_b(db): pass\n"
+    )
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1, failed=1, errors=2)
+    assert "✦" not in result.stdout.str()  # the log itself stays plain pytest
+    text = summary.read_text()
+    assert text.startswith("### ❌ pytest: 1 failed · 2 errors · 1 passed\n")
+    assert "| ❌ | `test_github_job_summary.py::test_payload` |" in text
+    assert "[test_github_job_summary.py:6](https://github.com/me/app/blob/abc123/test_github_job_summary.py#L6)" in text
+    assert "role: 'user' → 'admin'" in text
+    assert "(setup) <sub>+1 more like this</sub>" in text
+    assert "ConnectionError: no db" in text
+
+    pytester.makepyfile("def test_ok(): pass\n")
+    pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    assert summary.read_text().count("### ") == 2  # appended, for several pytest steps in one job
+    assert "### ✅ pytest: all green · 1 passed" in summary.read_text()
+
+
+def test_no_job_summary_when_turned_off(pytester, monkeypatch):
+    summary = pytester.path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("PYTEST_GLOW_SUMMARY", "0")
+    pytester.makepyfile("def test_ok(): pass\n")
+    pytester.runpytest_subprocess()
+    assert not summary.exists()
