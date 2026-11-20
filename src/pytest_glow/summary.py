@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from . import diff as assert_diff
-from . import render
+from . import render, rerun
 from .reporter import group_failures
 
 MAX_FAILURES = 30
@@ -49,6 +49,7 @@ class JobSummary:
         self.counts: Counter = Counter()
         self.failures: list[Any] = []
         self.durations: dict[str, float] = {}
+        self.flaky: list[tuple[str, int, str]] = []
         self.explained: dict[tuple[str, str], str] = {}  # what differed in a failed `==`, by (nodeid, when)
         self._compare: tuple[Any, Any] | None = None
         self.start = time.monotonic()
@@ -74,6 +75,9 @@ class JobSummary:
         self.durations[report.nodeid] = self.durations.get(report.nodeid, 0.0) + report.duration
         if report.failed:
             self.failures.append(SimpleNamespace(report=report))
+        flaky = rerun.flaky(report) if report.when == "call" and report.passed else None
+        if flaky is not None:
+            self.flaky.append((report.nodeid, *flaky))
         if category in _ICONS:
             self.counts[category] += 1
 
@@ -112,12 +116,16 @@ class JobSummary:
         failing = self.counts["failed"] + self.counts["error"]
         named = {k: f"{k}s" if k == "error" and self.counts[k] > 1 else k for k in _ORDER}
         counts = " · ".join(f"{self.counts[k]} {named[k]}" for k in _ORDER if self.counts[k])
+        if self.flaky:
+            counts += f" · {len(self.flaky)} flaky"
         if failing:
             head = f"### ❌ pytest: {counts or 'failed'}"
         elif exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED:
             head = "### ⚪ pytest: no tests ran"
         elif exitstatus != pytest.ExitCode.OK:
             head = f"### ⚠️ pytest: exited with {int(exitstatus)} · {counts}"
+        elif self.flaky:
+            head = f"### 〰️ pytest: green, but flaky · {counts}"
         else:
             head = f"### ✅ pytest: all green · {counts}"
         out = [head, ""]
@@ -139,6 +147,12 @@ class JobSummary:
             groups = len(group_failures(self.failures))
             if groups > MAX_FAILURES:
                 out.append(f"\n… and {groups - MAX_FAILURES} more")
+            out.append("")
+
+        if self.flaky:
+            out += ["| | flaky test | passed on try | first failure |", "|---|---|---|---|"]
+            for nodeid, attempts, first in self.flaky[:MAX_FAILURES]:
+                out.append(f"| 〰️ | `{_cell(nodeid, 120)}` | {attempts} | {_cell(first)} |")
             out.append("")
 
         slowest = sorted(self.durations.items(), key=lambda item: -item[1])[:MAX_SLOWEST]

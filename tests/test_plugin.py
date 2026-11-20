@@ -745,3 +745,57 @@ def test_glow_ff_off_keeps_the_order(pytester):
     _, out = run(pytester, "--glow", "-v")
     assert "↯" not in out
     assert out.index("test_a.py::test_one") < out.index("test_b.py::test_broken")
+
+
+FLAKY_TEST = """
+import pathlib
+
+def test_flaky():
+    marker = pathlib.Path("tried")
+    if not marker.exists():
+        marker.write_text("x")
+        assert 0, "network blip"
+
+def test_broken():
+    assert 0, "always"
+"""
+
+
+def test_glow_rerun_calls_out_flaky_tests(pytester):
+    pytester.makepyfile(test_f=FLAKY_TEST)
+    result, out = run(pytester, "--glow", "--glow-rerun", "-k", "test_flaky")
+    assert result.ret == 0
+    assert "〰 GREEN, BUT FLAKY" in out
+    assert "1 passed · 1 flaky" in out
+    assert "test_f.py::test_flaky  flaky, passed on try 2 · network blip" in out
+
+
+def test_glow_rerun_gives_up(pytester):
+    pytester.makepyfile(test_f=FLAKY_TEST)
+    result, out = run(pytester, "--glow", "--glow-rerun=2", "-k", "test_broken")
+    assert result.ret == 1
+    assert "1 failed" in out and "flaky" not in out
+
+
+def test_glow_rerun_with_the_standard_reporter(pytester, monkeypatch):
+    pytester.makepyfile(test_f=FLAKY_TEST)
+    monkeypatch.setenv("PYTEST_GLOW_RERUN", "1")
+    result = pytester.runpytest_subprocess("--no-glow", "-rA", "-n", "2", "-p", "xdist")
+    result.assert_outcomes(passed=1, failed=1)
+
+
+def test_flaky_tests_in_the_job_summary(pytester, monkeypatch):
+    summary = pytester.path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    pytester.makepyfile(test_f=FLAKY_TEST)
+    pytester.runpytest_subprocess("--glow-rerun", "-k", "test_flaky")
+    text = summary.read_text()
+    assert text.startswith("### 〰️ pytest: green, but flaky · 1 passed · 1 flaky")
+    assert "| 〰️ | `test_f.py::test_flaky` | 2 | AssertionError: network blip |" in text
+
+
+def test_glow_rerun_rejects_nonsense(pytester):
+    pytester.makepyfile("def test_ok(): pass\n")
+    result = pytester.runpytest_subprocess("--glow-rerun=lots")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    assert "takes a number of reruns" in result.stderr.str()

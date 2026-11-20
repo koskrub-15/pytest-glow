@@ -63,6 +63,15 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "(also PYTEST_GLOW_FF=1 or glow_ff = true in the ini)",
     )
     group.addoption(
+        "--glow-rerun",
+        nargs="?",
+        const="1",
+        default=None,
+        metavar="N",
+        help="run a failed test again, up to N times (default 1); one that then passes is reported as flaky "
+        "(also PYTEST_GLOW_RERUN=N or glow_rerun = N in the ini)",
+    )
+    group.addoption(
         "--glow-wrapped",
         action="store_true",
         default=False,
@@ -70,6 +79,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
     parser.addini("glow_summary", "on GitHub Actions, write a job summary of the run", type="bool", default=True)
     parser.addini("glow_ff", "run the likely failures first", type="bool", default=False)
+    parser.addini("glow_rerun", "run a failed test again, up to this many times", default="")
     parser.addini("glow_boss", "fight the test suite as a boss", type="bool", default=False)
     parser.addini("glow_sound", "play a sound when the run ends", type="bool", default=False)
 
@@ -155,6 +165,17 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
 
 
 ORDERED = pytest.StashKey["Counter[str]"]()
+RERUNS = pytest.StashKey[int]()
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> bool | None:
+    times = item.config.stash.get(RERUNS, 0)
+    if not times:
+        return None
+    from . import rerun
+
+    return rerun.protocol(item, nextitem, times)
 
 
 @pytest.hookimpl(trylast=True)
@@ -172,8 +193,9 @@ def pytest_configure(config: pytest.Config) -> None:
     share = config.getoption("glow_share", None)
     if share and not share.lower().endswith(".svg"):
         raise pytest.UsageError(f"--glow-share writes SVG; give it a .svg path, not {share!r}")
-    from . import summary
+    from . import rerun, summary
 
+    config.stash[RERUNS] = rerun.reruns(config)
     path = summary.wanted(config)
     if path:
         config.pluginmanager.register(summary.JobSummary(config, path), "glow-summary")
