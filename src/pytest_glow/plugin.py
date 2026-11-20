@@ -56,12 +56,20 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="save the run as an SVG card to share (default: glow-card.svg); implies --glow",
     )
     group.addoption(
+        "--glow-ff",
+        action="store_true",
+        default=None,
+        help="run first what likely fails: failed last time, files you changed, new and flaky tests "
+        "(also PYTEST_GLOW_FF=1 or glow_ff = true in the ini)",
+    )
+    group.addoption(
         "--glow-wrapped",
         action="store_true",
         default=False,
         help="show everything glow remembers about this project (with --glow-share, save it as SVG) and exit",
     )
     parser.addini("glow_summary", "on GitHub Actions, write a job summary of the run", type="bool", default=True)
+    parser.addini("glow_ff", "run the likely failures first", type="bool", default=False)
     parser.addini("glow_boss", "fight the test suite as a boss", type="bool", default=False)
     parser.addini("glow_sound", "play a sound when the run ends", type="bool", default=False)
 
@@ -144,6 +152,19 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
         wrapped.save(recap, share)
         console.print(f"  ✦ saved {share}", style="dim", soft_wrap=True)
     return 0
+
+
+ORDERED = pytest.StashKey["Counter[str]"]()
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config, items: list[pytest.Item]) -> None:
+    if not flag(config, "ff") or not items:
+        return
+    from . import order
+    from .history import History
+
+    config.stash[ORDERED] = order.reorder(items, History(getattr(config, "cache", None)), str(config.rootpath))
 
 
 @pytest.hookimpl(trylast=True)

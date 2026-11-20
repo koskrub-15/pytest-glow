@@ -716,3 +716,32 @@ def test_no_job_summary_when_turned_off(pytester, monkeypatch):
     pytester.makepyfile("def test_ok(): pass\n")
     pytester.runpytest_subprocess()
     assert not summary.exists()
+
+
+def test_glow_ff_runs_the_likely_failures_first(pytester, monkeypatch):
+    pytester.makepyfile(
+        test_a="def test_one(): pass\ndef test_two(): pass\n",
+        test_b="def test_broken(): assert 0\n",
+        test_cart="def test_total(): pass\n",
+    )
+    run(pytester, "--glow")
+    pytester.makepyfile(test_c="def test_new(): pass\n")
+    monkeypatch.setenv("PYTEST_GLOW_CHANGED", "cart.py")  # as if shop/cart.py had been edited
+    _, out = run(pytester, "--glow", "--glow-ff", "-v")
+    assert "↯ first: 1 failing · 1 changed · 1 new" in out
+    ran = re.findall(r"(test_\w+\.py::test_\w+)", out[out.index("↯") :])
+    assert ran[:5] == [
+        "test_b.py::test_broken",
+        "test_b.py::test_broken",  # once as it fails, once in the -v list
+        "test_cart.py::test_total",
+        "test_c.py::test_new",
+        "test_a.py::test_one",
+    ]
+
+
+def test_glow_ff_off_keeps_the_order(pytester):
+    pytester.makepyfile(test_a="def test_one(): pass\n", test_b="def test_broken(): assert 0\n")
+    run(pytester, "--glow")
+    _, out = run(pytester, "--glow", "-v")
+    assert "↯" not in out
+    assert out.index("test_a.py::test_one") < out.index("test_b.py::test_broken")

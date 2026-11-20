@@ -31,7 +31,8 @@ from . import diff as assert_diff
 from .blame import ago, blame, changed_since, describe, head
 from .boss import HEARTS, Fight, arena, drop, loot_line, outcome
 from .history import History, is_flaky
-from .plugin import flag
+from .order import GROUPS
+from .plugin import ORDERED, flag
 
 SUMMARY_EXIT_CODES = (
     pytest.ExitCode.OK,
@@ -409,6 +410,11 @@ class GlowReporter(TerminalReporter):
         if self._workers:
             bits.append(Text.assemble((str(len(self._workers)), "bold"), (" workers", "dim")))
         self._print(Text("   ") + Text(" · ", style="dim").join(bits))
+        first = self.config.stash.get(ORDERED, None)
+        if first:
+            line = Text.assemble(("   ↯ first: ", "bold #facc15"))
+            names = [Text.assemble((str(first[g]), "bold"), (f" {g}", "dim")) for g in GROUPS if first[g]]
+            self._print(line + Text(" · ", style="dim").join(names))
         self._print()
 
     # -- running tests -----------------------------------------------------------------
