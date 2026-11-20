@@ -673,3 +673,174 @@ def test_wrapped(pytester):
     assert "👹 3 won · 0 lost" in out
     assert "collected" not in out  # nothing ran: no verdict
     assert (pytester.path / "recap.svg").read_text().startswith("<svg")
+
+
+def test_github_job_summary(pytester, monkeypatch):
+    summary = pytester.path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "me/app")
+    monkeypatch.setenv("GITHUB_SHA", "abc123")
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(pytester.path))
+    pytester.makepyfile(
+        "import pytest\n"
+        "@pytest.fixture\n"
+        "def db():\n"
+        "    raise ConnectionError('no db')\n"
+        "def test_ok(): pass\n"
+        "def test_payload(): assert {'role': 'user', 'id': 1} == {'role': 'admin', 'id': 1}\n"
+        "def test_a(db): pass\n"
+        "def test_b(db): pass\n"
+    )
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(passed=1, failed=1, errors=2)
+    assert "✦" not in result.stdout.str()  # the log itself stays plain pytest
+    text = summary.read_text()
+    assert text.startswith("### ❌ pytest: 1 failed · 2 errors · 1 passed\n")
+    assert "| ❌ | `test_github_job_summary.py::test_payload` |" in text
+    assert "[test_github_job_summary.py:6](https://github.com/me/app/blob/abc123/test_github_job_summary.py#L6)" in text
+    assert "role: 'user' → 'admin'" in text
+    assert "(setup) <sub>+1 more like this</sub>" in text
+    assert "ConnectionError: no db" in text
+
+    pytester.makepyfile("def test_ok(): pass\n")
+    pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    assert summary.read_text().count("### ") == 2  # appended, for several pytest steps in one job
+    assert "### ✅ pytest: all green · 1 passed" in summary.read_text()
+
+
+def test_no_job_summary_when_turned_off(pytester, monkeypatch):
+    summary = pytester.path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("PYTEST_GLOW_SUMMARY", "0")
+    pytester.makepyfile("def test_ok(): pass\n")
+    pytester.runpytest_subprocess()
+    assert not summary.exists()
+
+
+def test_glow_ff_runs_the_likely_failures_first(pytester, monkeypatch):
+    pytester.makepyfile(
+        test_a="def test_one(): pass\ndef test_two(): pass\n",
+        test_b="def test_broken(): assert 0\n",
+        test_cart="def test_total(): pass\n",
+    )
+    run(pytester, "--glow")
+    pytester.makepyfile(test_c="def test_new(): pass\n")
+    monkeypatch.setenv("PYTEST_GLOW_CHANGED", "cart.py")  # as if shop/cart.py had been edited
+    _, out = run(pytester, "--glow", "--glow-ff", "-v")
+    assert "↯ first: 1 failing · 1 changed · 1 new" in out
+    ran = re.findall(r"(test_\w+\.py::test_\w+)", out[out.index("↯") :])
+    assert ran[:5] == [
+        "test_b.py::test_broken",
+        "test_b.py::test_broken",  # once as it fails, once in the -v list
+        "test_cart.py::test_total",
+        "test_c.py::test_new",
+        "test_a.py::test_one",
+    ]
+
+
+def test_glow_ff_off_keeps_the_order(pytester):
+    pytester.makepyfile(test_a="def test_one(): pass\n", test_b="def test_broken(): assert 0\n")
+    run(pytester, "--glow")
+    _, out = run(pytester, "--glow", "-v")
+    assert "↯" not in out
+    assert out.index("test_a.py::test_one") < out.index("test_b.py::test_broken")
+
+
+FLAKY_TEST = """
+import pathlib
+
+def test_flaky():
+    marker = pathlib.Path("tried")
+    if not marker.exists():
+        marker.write_text("x")
+        assert 0, "network blip"
+
+def test_broken():
+    assert 0, "always"
+"""
+
+
+def test_glow_rerun_calls_out_flaky_tests(pytester):
+    pytester.makepyfile(test_f=FLAKY_TEST)
+    result, out = run(pytester, "--glow", "--glow-rerun", "-k", "test_flaky")
+    assert result.ret == 0
+    assert "〰 GREEN, BUT FLAKY" in out
+    assert "1 passed · 1 flaky" in out
+    assert "test_f.py::test_flaky  flaky, passed on try 2 · network blip" in out
+
+
+def test_glow_rerun_gives_up(pytester):
+    pytester.makepyfile(test_f=FLAKY_TEST)
+    result, out = run(pytester, "--glow", "--glow-rerun=2", "-k", "test_broken")
+    assert result.ret == 1
+    assert "1 failed" in out and "flaky" not in out
+
+
+def test_glow_rerun_with_the_standard_reporter(pytester, monkeypatch):
+    pytester.makepyfile(test_f=FLAKY_TEST)
+    monkeypatch.setenv("PYTEST_GLOW_RERUN", "1")
+    result = pytester.runpytest_subprocess("--no-glow", "-rA", "-n", "2", "-p", "xdist")
+    result.assert_outcomes(passed=1, failed=1)
+
+
+def test_flaky_tests_in_the_job_summary(pytester, monkeypatch):
+    summary = pytester.path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    pytester.makepyfile(test_f=FLAKY_TEST)
+    pytester.runpytest_subprocess("--glow-rerun", "-k", "test_flaky")
+    text = summary.read_text()
+    assert text.startswith("### 〰️ pytest: green, but flaky · 1 passed · 1 flaky")
+    assert "| 〰️ | `test_f.py::test_flaky` | 2 | AssertionError: network blip |" in text
+
+
+def test_glow_rerun_rejects_nonsense(pytester):
+    pytester.makepyfile("def test_ok(): pass\n")
+    result = pytester.runpytest_subprocess("--glow-rerun=lots")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    assert "takes a number of reruns" in result.stderr.str()
+
+
+def test_glow_watch(pytester):
+    import queue
+    import subprocess
+    import sys
+    import threading
+
+    pytester.makepyfile(calc="def add(a, b):\n    return a - b\n")
+    pytester.makepyfile(test_calc="from calc import add\n\ndef test_add():\n    assert add(2, 2) == 4\n")
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "pytest", "--glow-watch", "-p", "no:randomly"],
+        cwd=pytester.path,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+    )
+    lines: queue.Queue = queue.Queue()
+    threading.Thread(target=lambda: [lines.put(line) for line in proc.stdout], daemon=True).start()
+
+    def until(word):
+        seen = []
+        while True:
+            line = lines.get(timeout=30)
+            seen.append(ANSI.sub("", line))
+            if word in line:
+                return "".join(seen)
+
+    try:
+        first = until("watching")
+        assert "glow watch · run 1" in first and "1 failed" in first
+        (pytester.path / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+        second = until("watching")
+        assert "run 2 · changed calc.py" in second
+        assert "1 passed" in second
+        proc.stdin.write("\n")
+        proc.stdin.flush()
+        assert "run 3" in until("watching")
+        proc.stdin.write("q\n")
+        proc.stdin.flush()
+        assert proc.wait(timeout=30) == 0
+    finally:
+        proc.kill()

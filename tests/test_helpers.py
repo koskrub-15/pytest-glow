@@ -444,3 +444,36 @@ def test_wrapped_quips():
     assert quip(1.0, 0.5).startswith("Go to sleep")
     assert quip(0.97, 0.0) == "Your CI fears you."
     assert quip(0.1, 0.0) == "Your tests are more of a suggestion."
+
+
+def test_watch_scan_and_changes(tmp_path):
+    from pytest_glow import watch
+
+    (tmp_path / "app.py").write_text("x = 1\n")
+    (tmp_path / "pytest.ini").write_text("[pytest]\n")
+    (tmp_path / "notes.txt").write_text("not watched\n")
+    for skipped in (".venv", "__pycache__", "node_modules", "pkg.egg-info"):
+        (tmp_path / skipped).mkdir()
+        (tmp_path / skipped / "mod.py").write_text("")
+    before = watch.scan(str(tmp_path))
+    assert sorted(os.path.basename(p) for p in before) == ["app.py", "pytest.ini"]
+
+    os.utime(tmp_path / "app.py", ns=(1, 1))
+    (tmp_path / "new.py").write_text("")
+    after = watch.scan(str(tmp_path))
+    assert [os.path.basename(p) for p in watch.changes(before, after)] == ["app.py", "new.py"]
+
+
+def test_watch_runs_the_same_command(monkeypatch):
+    import sys
+
+    from pytest_glow import watch
+
+    assert watch.child_args(("-x", "--glow-watch", "tests")) == [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-x",
+        "tests",
+        "--glow-ff",
+    ]

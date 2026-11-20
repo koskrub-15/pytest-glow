@@ -56,11 +56,36 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="save the run as an SVG card to share (default: glow-card.svg); implies --glow",
     )
     group.addoption(
+        "--glow-ff",
+        action="store_true",
+        default=None,
+        help="run first what likely fails: failed last time, files you changed, new and flaky tests "
+        "(also PYTEST_GLOW_FF=1 or glow_ff = true in the ini)",
+    )
+    group.addoption(
+        "--glow-rerun",
+        nargs="?",
+        const="1",
+        default=None,
+        metavar="N",
+        help="run a failed test again, up to N times (default 1); one that then passes is reported as flaky "
+        "(also PYTEST_GLOW_RERUN=N or glow_rerun = N in the ini)",
+    )
+    group.addoption(
+        "--glow-watch",
+        action="store_true",
+        default=False,
+        help="rerun the tests on every save, what failed and what changed first; enter reruns all, q quits",
+    )
+    group.addoption(
         "--glow-wrapped",
         action="store_true",
         default=False,
         help="show everything glow remembers about this project (with --glow-share, save it as SVG) and exit",
     )
+    parser.addini("glow_summary", "on GitHub Actions, write a job summary of the run", type="bool", default=True)
+    parser.addini("glow_ff", "run the likely failures first", type="bool", default=False)
+    parser.addini("glow_rerun", "run a failed test again, up to this many times", default="")
     parser.addini("glow_boss", "fight the test suite as a boss", type="bool", default=False)
     parser.addini("glow_sound", "play a sound when the run ends", type="bool", default=False)
 
@@ -124,6 +149,15 @@ def _terminal_stream(force: bool):
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_cmdline_main(config: pytest.Config) -> int | None:
+    if config.getoption("glow_watch", False):
+        from . import watch
+
+        # pytest captures stdin from the start: the keys, and breakpoint() in the runs, need the real one back
+        capture = config.pluginmanager.get_plugin("capturemanager")
+        if capture is not None:
+            capture.stop_global_capturing()
+        params = config.invocation_params
+        return watch.main(params.args, str(params.dir), str(config.rootpath))
     if not config.getoption("glow_wrapped", False):
         return None
     from _pytest.cacheprovider import Cache
@@ -145,11 +179,41 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
     return 0
 
 
+ORDERED = pytest.StashKey["Counter[str]"]()
+RERUNS = pytest.StashKey[int]()
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> bool | None:
+    times = item.config.stash.get(RERUNS, 0)
+    if not times:
+        return None
+    from . import rerun
+
+    return rerun.protocol(item, nextitem, times)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config, items: list[pytest.Item]) -> None:
+    if not flag(config, "ff") or not items:
+        return
+    from . import order
+    from .history import History
+
+    config.stash[ORDERED] = order.reorder(items, History(getattr(config, "cache", None)), str(config.rootpath))
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_configure(config: pytest.Config) -> None:
     share = config.getoption("glow_share", None)
     if share and not share.lower().endswith(".svg"):
         raise pytest.UsageError(f"--glow-share writes SVG; give it a .svg path, not {share!r}")
+    from . import rerun, summary
+
+    config.stash[RERUNS] = rerun.reruns(config)
+    path = summary.wanted(config)
+    if path:
+        config.pluginmanager.register(summary.JobSummary(config, path), "glow-summary")
     wanted = _wanted(config)
     if wanted is False or not _compatible(config):
         return

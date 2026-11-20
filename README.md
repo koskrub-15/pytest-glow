@@ -29,6 +29,18 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 - a verdict panel with the counts and a proportional bar
 - the command to rerun just the failures (`pytest --lf` when there are many)
 
+**While you work**
+- `pytest --glow-watch`: reruns on every save, what failed last time and what you just changed first. The header
+  says which files changed; enter reruns everything, q quits
+- `--glow-ff`: runs first what likely fails: what failed last time, the test files you're editing (or the ones
+  named after a module you're editing: `test_cart.py` for `shop/cart.py`), new tests and flaky ones
+- `--glow-rerun[=N]`: a failed test runs again, up to N times. One that then passes is called out as flaky with
+  how it failed the first time, and the run is GREEN, BUT FLAKY rather than red. Works under xdist and in CI
+
+**On GitHub Actions** the log stays plain pytest, and the run also lands on the run's page as a job summary:
+the verdict, failures grouped with a link to the failing line at the commit and `==` diffs as one-liners,
+flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = false` turns it off.
+
 **Across runs** (kept in `.pytest_cache`, nothing to set up)
 - green streaks, and the tests that were just *fixed* or just *started failing*
 - flaky tests, with their recent pass/fail trail
@@ -94,6 +106,10 @@ Just run `pytest`. Everything else is optional:
 | `--glow-boss` or `PYTEST_GLOW_BOSS=1` | fight the suite as a boss; `glow_boss = true` in the ini to keep it on |
 | `--glow-sound` or `PYTEST_GLOW_SOUND=1` | 8-bit sounds for combos, the boss and the end of the run (terminal only); `glow_sound = true` in the ini |
 | `--glow-share[=PATH]` | save the run as an SVG card, `glow-card.svg` by default |
+| `--glow-watch` | rerun on every save, failures and changed tests first |
+| `--glow-ff` or `PYTEST_GLOW_FF=1` | run the likely failures first; `glow_ff = true` in the ini |
+| `--glow-rerun[=N]` or `PYTEST_GLOW_RERUN=N` | rerun a failed test up to N times (1 by default) and call out flaky ones; `glow_rerun = N` in the ini |
+| `PYTEST_GLOW_SUMMARY=0` | no job summary on GitHub Actions; `glow_summary = false` in the ini |
 | `--glow-wrapped` | show everything glow remembers about the project and exit; with `--glow-share`, save it as SVG |
 | `PYTEST_GLOW_LINK` | where clickable paths go, e.g. `pycharm://open?file={path}&line={line}`; `off` to turn them off |
 | `-v` | also list every test as it finishes |

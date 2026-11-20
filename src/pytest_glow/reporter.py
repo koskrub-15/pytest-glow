@@ -24,14 +24,15 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, hang, progress, render, share, sound
+from . import __version__, hang, progress, render, rerun, share, sound
 from . import achievements as ach
 from . import coverage as cov
 from . import diff as assert_diff
 from .blame import ago, blame, changed_since, describe, head
 from .boss import HEARTS, Fight, arena, drop, loot_line, outcome
 from .history import History, is_flaky
-from .plugin import flag
+from .order import GROUPS
+from .plugin import ORDERED, flag
 
 SUMMARY_EXIT_CODES = (
     pytest.ExitCode.OK,
@@ -167,6 +168,7 @@ class GlowReporter(TerminalReporter):
         self._running: dict[str, float] = {}
         self._counts: Counter = Counter()
         self._failures: list[Failure] = []
+        self._flaky: list[tuple[str, int, str]] = []  # (nodeid, attempts it took, how it failed first)
         self._tracebacks: dict[tuple[str, str], Any] = {}
         self._compare: tuple[Any, Any] | None = None  # operands of the last failed `==` assertion
         self._diffs: dict[tuple[str, str], assert_diff.Diff] = {}
@@ -409,6 +411,11 @@ class GlowReporter(TerminalReporter):
         if self._workers:
             bits.append(Text.assemble((str(len(self._workers)), "bold"), (" workers", "dim")))
         self._print(Text("   ") + Text(" · ", style="dim").join(bits))
+        first = self.config.stash.get(ORDERED, None)
+        if first:
+            line = Text.assemble(("   ↯ first: ", "bold #facc15"))
+            names = [Text.assemble((str(first[g]), "bold"), (f" {g}", "dim")) for g in GROUPS if first[g]]
+            self._print(line + Text(" · ", style="dim").join(names))
         self._print()
 
     # -- running tests -----------------------------------------------------------------
@@ -496,6 +503,11 @@ class GlowReporter(TerminalReporter):
             if report.failed:
                 key = (report.nodeid, report.when)
                 self._failures.append(Failure(report, self._tracebacks.pop(key, None), self._diffs.pop(key, None)))
+            flaky = rerun.flaky(report) if report.when == "call" and report.passed else None
+            if flaky is not None:
+                self._flaky.append((report.nodeid, *flaky))
+        if flaky is not None and self._verbose >= -1:
+            self._print(self._flaky_line(report.nodeid, *flaky))
         if report.failed and self._verbose >= -1:
             line = Text.assemble(("  ✗ ", "bold red"), self._node(report.nodeid, self._crash_url(report)))
             if report.when != "call":
@@ -569,6 +581,14 @@ class GlowReporter(TerminalReporter):
             if phase > self._boss_phase and left > 0:
                 player.play("roar")
             self._boss_phase = max(phase, self._boss_phase)
+
+    def _flaky_line(self, nodeid: str, attempts: int, first: str) -> Text:
+        return Text.assemble(
+            ("  〰 ", "bold yellow"),
+            self._node(nodeid, self._test_url(nodeid)),
+            (f"  flaky, passed on try {attempts}", "yellow"),
+            (f" · {first.removeprefix('AssertionError: ')}" if first else "", "dim"),
+        )
 
     def _file_line(self, fs: FileState, now: float | None = None) -> Text:
         live = now is not None
@@ -1298,13 +1318,16 @@ class GlowReporter(TerminalReporter):
         else:
             icon, word, st = "✓", "all green", "green"
         ok = word == "all green"
-        if ok and self._shiny:
+        if ok and self._flaky:
+            icon, word, st = "〰", "green, but flaky", "yellow"
+        elif ok and self._shiny:
             icon, word, st = "✦", "shiny ✦", "gold"
 
         duration = self._duration
         counts = Counter(self._counts)
         extra = {
             "collection error": (len(self._collect_errors), "red"),
+            "flaky": (len(self._flaky), "yellow"),
             "warning": (len(self.stats.get("warnings", [])), "yellow"),
             "deselected": (len(self.stats.get("deselected", [])), "grey50"),
         }
@@ -1397,9 +1420,12 @@ class GlowReporter(TerminalReporter):
             if len(groups) > 15:
                 rest = sum(map(len, groups[15:]))
                 self._print(Text(f"    … and {rest} more", style="dim"))
-            rerun = self._rerun_command()
-            if rerun:
-                self._print(Text.assemble(("  ↻ rerun  ", "bold cyan"), (rerun, "cyan")))
+            again = self._rerun_command()
+            if again:
+                self._print(Text.assemble(("  ↻ rerun  ", "bold cyan"), (again, "cyan")))
+        if self._flaky and not getattr(self, "no_summary", False):
+            for nodeid, attempts, first in self._flaky[:15]:
+                self._print(self._flaky_line(nodeid, attempts, first))
         title = Text(f" pytest-glow {__version__} ", style="dim")
 
         def panel(reveal: float = 1.0, now: float | None = None) -> render.GlowPanel:

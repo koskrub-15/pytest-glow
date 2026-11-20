@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+- `pytest --glow-watch`: reruns on every save, failures and the tests you changed first.
+- `--glow-ff`: runs first what failed last time, the tests you're editing, new and flaky tests.
+- `--glow-rerun[=N]`: reruns failed tests; ones that then pass are called out as flaky.
+- On GitHub Actions, a job summary of the run: failures with links to the line, flaky and slowest tests.
+
 ## [0.3.0] - 2026-11-19
 
 - Failures that failed the same way are grouped under one traceback.
