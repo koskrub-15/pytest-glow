@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-20
+
 - `pytest --glow-watch`: reruns on every save, failures and the tests you changed first.
 - `--glow-ff`: runs first what failed last time, the tests you're editing, new and flaky tests.
 - `--glow-rerun[=N]`: reruns failed tests; ones that then pass are called out as flaky.
