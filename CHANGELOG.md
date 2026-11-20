@@ -11,6 +11,8 @@ All notable changes to this project are documented here. The format follows
 - `--glow-rerun[=N]`: reruns failed tests; ones that then pass are called out as flaky.
 - On GitHub Actions, a job summary of the run: failures with links to the line, flaky and slowest tests.
 
+## [0.3.0] - 2026-11-19
+
 - Failures that failed the same way are grouped under one traceback.
 - Clickable paths for tests, files and failures (OSC 8); `PYTEST_GLOW_LINK` picks the URL.
 - A test running for over 3s shows the line it's stuck on and what it's waiting in.
