@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import platform
 import random
@@ -118,6 +119,14 @@ def _signature(report: Any) -> tuple | None:
     if crash is None:
         return None
     return (report.when, str(crash.path), crash.lineno, _ADDRESS.sub("0x…", render.crash_message(report)))
+
+
+def fingerprint(report: Any) -> str | None:
+    """A short, stable hash of the failure's signature, to tell next run whether it fails the same way."""
+    signature = _signature(report)
+    if signature is None:
+        return None
+    return hashlib.blake2b(repr(signature).encode(), digest_size=4).hexdigest()
 
 
 def group_failures(failures: list) -> list[list]:
@@ -921,22 +930,26 @@ class GlowReporter(TerminalReporter):
         parts = []
         streak = self._history.failing_streak(report.nodeid) + 1
         if streak >= 2:
-            parts.append(f"failing {streak} runs in a row")
+            before, now = self._history.last_failure(report.nodeid), fingerprint(report)
+            how = ""
+            if before and now:
+                how = ", same failure" if before == now else ", a new failure"
+            parts.append(f"red for {streak} runs{how}")
         last = self._history.last_pass(report.nodeid)
         if last is not None:
             when, commit = last
-            text = f"last passed {ago(time.time() - when)}"
+            text = f"passed {ago(time.time() - when)}"
             if commit:
                 since = commits_since(str(self.config.rootpath), commit)
                 if since == 0:
-                    text += ", on this very commit"
+                    text += " on this commit"
                 elif since:
-                    text += f" at {commit[:7]}, {since} commit{'s' if since != 1 else ''} ago"
+                    text += f" at {commit[:7]}, {since} commit{'s' if since != 1 else ''} back"
                 else:
                     text += f" at {commit[:7]}"  # rebased away, or another branch
             parts.append(text)
         elif "P" not in outcomes:
-            parts.append("never passed in the runs glow remembers")
+            parts.append("never seen it pass")
         return " · ".join(parts) or None
 
     def _print_warnings(self) -> None:
@@ -1535,7 +1548,20 @@ class GlowReporter(TerminalReporter):
         if self._coverage is not None:
             measured = (self._coverage.total, {f.path: f.percent for f in self._coverage.files})
         commit = head(str(self.config.rootpath))
-        self._history.record(results, self._duration, ok=not failing, failed=failing, coverage=measured, commit=commit)
+        signatures: dict[str, str] = {}
+        for failure in self._failures:
+            found = fingerprint(failure.report)
+            if found is not None and failure.report.nodeid:
+                signatures.setdefault(failure.report.nodeid, found)
+        self._history.record(
+            results,
+            self._duration,
+            ok=not failing,
+            failed=failing,
+            coverage=measured,
+            commit=commit,
+            signatures=signatures,
+        )
         self._history.tally(
             ok=not failing,
             counts=dict(self._counts),

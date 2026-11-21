@@ -854,18 +854,29 @@ def test_a_failure_remembers_when_and_where_it_last_passed(pytester, monkeypatch
     run(pytester, "--glow")
     monkeypatch.setenv("BREAK", "1")
     _, out = run(pytester, "--glow")
-    assert "↳ last passed just now, on this very commit" in out
+    assert "↳ passed just now on this commit" in out
     for n in range(2):
         pytester.makefile(".txt", **{f"n{n}": "x"})
         git("add", ".")
         git("commit", "-q", "-m", f"change {n}")
     _, out = run(pytester, "--glow")
-    assert re.search(r"↳ failing 2 runs in a row · last passed just now at [0-9a-f]{7}, 2 commits ago", out)
+    assert re.search(r"↳ red for 2 runs, same failure · passed just now at [0-9a-f]{7}, 2 commits back", out)
 
 
 def test_a_failure_that_never_passed(pytester):
     pytester.makepyfile(test_n="def test_n(): assert False\n")
     _, out = run(pytester, "--glow")
-    assert "↳ failing" not in out and "never passed" not in out  # nothing remembered yet
+    assert "↳ red for" not in out and "never seen" not in out  # nothing remembered yet
     _, out = run(pytester, "--glow")
-    assert "↳ failing 2 runs in a row · never passed in the runs glow remembers" in out
+    assert "↳ red for 2 runs, same failure · never seen it pass" in out
+
+
+def test_a_failure_knows_if_it_fails_the_same_way(pytester, monkeypatch):
+    pytester.makepyfile(test_w="import os\ndef test_w(): assert os.environ.get('V') == 'ok'\n")
+    monkeypatch.setenv("V", "a")
+    run(pytester, "--glow")
+    _, out = run(pytester, "--glow")
+    assert "↳ red for 2 runs, same failure" in out
+    monkeypatch.setenv("V", "b")
+    _, out = run(pytester, "--glow")
+    assert "↳ red for 3 runs, a new failure" in out

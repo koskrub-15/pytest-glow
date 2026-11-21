@@ -58,6 +58,7 @@ def blame(path: str, line: int) -> Blame | None:
 
 
 def ago(seconds: float) -> str:
+    seconds = max(seconds, 0)  # times are kept to the second, rounded either way
     for unit, size in (("year", 365 * 86400), ("month", 30 * 86400), ("day", 86400), ("hour", 3600), ("minute", 60)):
         n = int(seconds // size)
         if n:

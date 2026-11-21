@@ -73,6 +73,10 @@ class History:
             return None
         return int(p[0]), (p[1] if len(p) > 1 else None)
 
+    def last_failure(self, nodeid: str) -> str | None:
+        """The signature of how the test failed last run, if it did."""
+        return self.tests.get(nodeid, {}).get("s")
+
     def personal_best(self, n_tests: int) -> float | None:
         return self.best.get(str(n_tests))
 
@@ -115,8 +119,12 @@ class History:
         failed: int,
         coverage: tuple[float, dict[str, float]] | None = None,
         commit: str | None = None,
+        signatures: dict[str, str] | None = None,
     ) -> None:
-        """``commit``: HEAD as the run saw it; the run keeps it when green, each passing test either way."""
+        """``commit``: HEAD as the run saw it; the run keeps it when green, each passing test either way.
+
+        ``signatures``: how each failing test failed, so the next run can tell the same failure from a new one.
+        """
         now = round(time.time())
         for nodeid, (category, dur) in results.items():
             entry = self.tests.pop(nodeid, None) or {"o": "", "d": []}
@@ -125,6 +133,11 @@ class History:
                 entry["d"] = [*entry.get("d", []), round(dur, 4)][-MAX_DURATIONS:]
             if category == "passed":
                 entry["p"] = [now, commit] if commit else [now]
+            signature = (signatures or {}).get(nodeid)
+            if signature is None:
+                entry.pop("s", None)
+            else:
+                entry["s"] = signature
             # Re-inserting keeps the dict ordered by recency, so the oldest go first.
             self.tests[nodeid] = entry
         while len(self.tests) > MAX_TESTS:
