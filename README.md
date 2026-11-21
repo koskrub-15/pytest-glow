@@ -31,7 +31,8 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 
 **While you work**
 - `pytest --glow-watch`: reruns on every save, what failed last time and what you just changed first. The header
-  says which files changed; enter reruns everything, q quits
+  says which files changed. Keys, no Enter needed: `f` only what failed, `p` only tests matching a `-k`
+  pattern, `d` the failures again in pdb, enter everything, `q` quits
 - `--glow-ff`: runs first what likely fails: what failed last time, the test files you're editing (or the ones
   named after a module you're editing: `test_cart.py` for `shop/cart.py`), new tests and flaky ones
 - `--glow-rerun[=N]`: a failed test runs again, up to N times. One that then passes is called out as flaky with
@@ -47,6 +48,9 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
 - "faster/slower than last run", tests that got slower than usual, a sparkline of recent runs
 - on a red run, what changed in git since the last green one, with the files the failures point at first;
   and when nothing changed, a hint that it's likely flaky, the environment or data
+- under each failure, what its history says: `red for 4 runs, same failure · passed 2 days ago at 3f9c2e1,
+  5 commits back`. "a new failure" when it broke differently than last run, "on this commit" when it passed
+  minutes ago on the very same commit (so it's your uncommitted change, or it's flaky)
 
 **Pure showing off** (all of it remembered in `.pytest_cache` too)
 - personal bests: the fastest green run for a given number of tests, `🏆 new PB` when you beat it
@@ -56,6 +60,8 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
 - XP for every run (passes, green, combos, fixed tests, boss kills) and levels with titles, from Print
   Debugger to The One Who Runs pytest. A level up gets confetti and its own jingle
 - one green run in 500 comes out ✦ SHINY ✦: gold verdict, sparkle, 250 bonus XP
+- daily quests: three a day, the same all day ("fix 3 tests", "a ×50 combo", "red → green", "green before
+  10am"…), with their progress in the verdict and XP when done. `PYTEST_GLOW_QUESTS=0` turns them off
 - a burst of confetti over the verdict when you set a record or unlock something (never in CI or pipes)
 - under each failure, who last touched the failing line and when, from `git blame`
 - a duration sparkline next to each of the slowest tests, so you see the ones getting slower
@@ -106,10 +112,11 @@ Just run `pytest`. Everything else is optional:
 | `--glow-boss` or `PYTEST_GLOW_BOSS=1` | fight the suite as a boss; `glow_boss = true` in the ini to keep it on |
 | `--glow-sound` or `PYTEST_GLOW_SOUND=1` | 8-bit sounds for combos, the boss and the end of the run (terminal only); `glow_sound = true` in the ini |
 | `--glow-share[=PATH]` | save the run as an SVG card, `glow-card.svg` by default |
-| `--glow-watch` | rerun on every save, failures and changed tests first |
+| `--glow-watch` | rerun on every save, failures and changed tests first; `f`, `p`, `d`, enter and `q` while it waits |
 | `--glow-ff` or `PYTEST_GLOW_FF=1` | run the likely failures first; `glow_ff = true` in the ini |
 | `--glow-rerun[=N]` or `PYTEST_GLOW_RERUN=N` | rerun a failed test up to N times (1 by default) and call out flaky ones; `glow_rerun = N` in the ini |
 | `PYTEST_GLOW_SUMMARY=0` | no job summary on GitHub Actions; `glow_summary = false` in the ini |
+| `PYTEST_GLOW_QUESTS=0` | no daily quests |
 | `--glow-wrapped` | show everything glow remembers about the project and exit; with `--glow-share`, save it as SVG |
 | `PYTEST_GLOW_LINK` | where clickable paths go, e.g. `pycharm://open?file={path}&line={line}`; `off` to turn them off |
 | `-v` | also list every test as it finishes |
