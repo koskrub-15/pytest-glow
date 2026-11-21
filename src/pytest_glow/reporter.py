@@ -25,7 +25,7 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, hang, progress, render, rerun, share, sound
+from . import __version__, hang, progress, quests, render, rerun, share, sound
 from . import achievements as ach
 from . import coverage as cov
 from . import diff as assert_diff
@@ -205,6 +205,8 @@ class GlowReporter(TerminalReporter):
         self._loot: tuple[str, str] | None = None
         self._xp: tuple[int, int] | None = None  # (XP before this run, XP it earned)
         self._fixed = 0
+        self._quests: dict | None = None  # today's quests, this run counted in
+        self._quests_done: list = []  # the ones this run finished
         self._fight = Fight.for_project(config.rootpath.name) if flag(config, "boss") else None
         self._last_hit: float | None = None
         # sound only in an interactive terminal: never in CI or a pipe
@@ -1323,6 +1325,28 @@ class GlowReporter(TerminalReporter):
             boss_won=self._boss_won(),
             shiny=self._shiny,
         )
+        if quests.enabled():
+            state = quests.today(
+                history.quests,
+                self.config.rootpath.name,
+                typical=self._done,
+                hour=self._hour,
+                has_best=bool(history.best),
+            )
+            last = history.runs[-1] if history.runs else None
+            did = quests.RunFacts(
+                ok=ok,
+                ran=self._counts.get("passed", 0) + self._counts.get("failed", 0),
+                fixed=self._fixed,
+                max_combo=self._max_combo,
+                hour=self._hour,
+                new_pb=self._new_pb is not None,
+                comeback=ok and last is not None and not last.get("ok"),
+                spotless=not self._counts.get("skipped", 0) and not self.stats.get("warnings"),
+            )
+            self._quests_done = quests.advance(state, did)
+            self._quests = history.quests = state
+            gained += quests.xp(self._quests_done, state)
         self._xp = (history.xp, gained)
 
     def _boss_won(self) -> bool:
@@ -1447,6 +1471,8 @@ class GlowReporter(TerminalReporter):
             lines.append(line4)
             if self._xp is not None:
                 lines.append(progress.xp_line(*self._xp))
+            if self._quests is not None:
+                lines += quests.lines(self._quests, self._quests_done)
 
         self.console.print()
         if self._failures and not getattr(self, "no_summary", False):
@@ -1486,7 +1512,7 @@ class GlowReporter(TerminalReporter):
 
         if self._live_enabled and not os.environ.get("CI"):
             confetti = None
-            if self._new_pb is not None or self._unlocked or self._leveled_up() or self._shiny:
+            if self._new_pb is not None or self._unlocked or self._leveled_up() or self._shiny or self._quests_done:
                 confetti = render.Confetti(self.console.width)
             length = CELEBRATE if confetti else REVEAL
 
@@ -1529,7 +1555,8 @@ class GlowReporter(TerminalReporter):
             word=word,
             stops=stops,
             counts=counts,
-            details=[line for line in details if not line.plain.startswith("runs ")],  # sparkline: too noisy for a card
+            # the sparkline and the dailies: too noisy for a card
+            details=[line for line in details if not line.plain.startswith(("runs ", "📜"))],
         )
         path = os.path.join(str(self.config.invocation_params.dir), self._share)
         try:
@@ -1573,5 +1600,6 @@ class GlowReporter(TerminalReporter):
             shiny=self._shiny,
             boss=None if self._fight is None else "won" if self._boss_won() else "lost",
             loot=self._loot[0] if self._loot else None,
+            quests=len(self._quests_done),
         )
         self._history.save()

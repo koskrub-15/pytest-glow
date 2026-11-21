@@ -156,6 +156,8 @@ def render_wrapped(history: History, project: str) -> render.GlowPanel | Text:
     extras.append(f"🏅 {len(history.achievements)}/{len(ach.ALL)} achievements", style="bold")
     if life.get("shiny"):
         extras.append(f"    ✦ {life['shiny']} shiny", style="bold #facc15")
+    if life.get("quests"):
+        extras.append(f"    📜 {life['quests']} quests", style="bold")
     lines += [Text(""), extras, Text(""), Text(f"  “{quip(green_rate, night_share)}”", style="italic")]
     return render.GlowPanel(Group(*lines), render.GRADIENTS["glow"], Text(" pytest-glow wrapped ", style="dim"))
 

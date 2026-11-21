@@ -7,3 +7,9 @@ pytest_plugins = ["pytester"]
 def _no_job_summary(monkeypatch):
     # our own CI sets it: the runs inside the tests mustn't write into the real job summary
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_quests(monkeypatch):
+    # quests depend on the date: they'd make the XP the runs earn change from day to day
+    monkeypatch.setenv("PYTEST_GLOW_QUESTS", "0")

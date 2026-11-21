@@ -43,6 +43,7 @@ class History:
         self.achievements: dict[str, int] = dict(data.get("achievements", {}))  # key -> when unlocked
         self.greens: int = int(data.get("greens", 0))  # green runs in a row, beyond the runs kept
         self.life: dict[str, Any] = dict(data.get("life", {}))  # totals since glow first ran here
+        self.quests: dict[str, Any] = dict(data.get("quests", {}))  # today's, and how far along
 
     @property
     def xp(self) -> int:
@@ -168,6 +169,7 @@ class History:
         shiny: bool,
         boss: str | None = None,
         loot: str | None = None,
+        quests: int = 0,
     ) -> None:
         """Add a run to the lifetime totals. ``boss``: "won" or "lost" when there was a fight."""
         life = self.life
@@ -185,6 +187,7 @@ class History:
         add("xp", xp)
         add("fixed", fixed)
         add("shiny", int(shiny))
+        add("quests", quests)
         if boss:
             add(f"boss_{boss}", 1)
         life["best_combo"] = max(life.get("best_combo", 0), max_combo)
@@ -209,6 +212,7 @@ class History:
                     "achievements": self.achievements,
                     "greens": self.greens,
                     "life": self.life,
+                    "quests": self.quests,
                 },
             )
 

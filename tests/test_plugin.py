@@ -893,3 +893,23 @@ def test_a_failure_knows_if_it_fails_the_same_way(pytester, monkeypatch):
     monkeypatch.setenv("V", "b")
     _, out = run(pytester, "--glow")
     assert "↳ red for 3 runs, a new failure" in out
+
+
+def test_daily_quests_in_the_verdict(pytester, monkeypatch):
+    monkeypatch.delenv("PYTEST_GLOW_QUESTS")
+    pytester.makeconftest(
+        "import pytest_glow.quests as q\nq.pick = lambda *a, **k: [['greens', 2], ['volume', 100], ['spotless', 1]]\n"
+    )
+    pytester.makepyfile("def test_a(): pass\n")
+    _, out = run(pytester, "--glow")
+    assert "quest complete  a green run, no warnings, no skips  +40 XP" in out
+    assert "✦ +66 XP" in out  # 1 + 25 for green + 40 for the quest
+    _, out = run(pytester, "--glow")
+    assert "quest complete  2 green runs" in out
+    assert "📜 dailies ✓ 2 green runs · run 100 tests 2/100 · ✓ a green run" in out
+
+
+def test_quests_can_be_turned_off(pytester):
+    pytester.makepyfile("def test_a(): pass\n")
+    _, out = run(pytester, "--glow")
+    assert "📜" not in out
