@@ -28,7 +28,7 @@ from . import __version__, hang, progress, render, rerun, share, sound
 from . import achievements as ach
 from . import coverage as cov
 from . import diff as assert_diff
-from .blame import ago, blame, changed_since, describe, head
+from .blame import ago, blame, changed_since, commits_since, describe, head
 from .boss import HEARTS, Fight, arena, drop, loot_line, outcome
 from .history import History, is_flaky
 from .order import GROUPS
@@ -816,6 +816,9 @@ class GlowReporter(TerminalReporter):
                 who = self._blame(report)
                 if who is not None:
                     self._print(Text.assemble(("  ↳ ", "dim"), (who, "dim italic")))
+                memory = self._memory(report)
+                if memory is not None:
+                    self._print(Text.assemble(("  ↳ ", "dim"), (memory, "dim italic")))
             if failure.traceback is not None:
                 render.shorten_paths(failure.traceback, str(self.config.invocation_params.dir))
                 self.console.print(failure.traceback)
@@ -907,6 +910,34 @@ class GlowReporter(TerminalReporter):
                 self._oldest_blame = max(age, self._oldest_blame or 0)
             return f"line {loc.lineno} {describe(found)}"
         return None
+
+    def _memory(self, report: Any) -> str | None:
+        """What the history remembers of a failing test: how long it's been red, and since which commit."""
+        if not self._history.enabled or not report.nodeid:
+            return None
+        outcomes = self._history.outcomes(report.nodeid)
+        if not outcomes:
+            return None
+        parts = []
+        streak = self._history.failing_streak(report.nodeid) + 1
+        if streak >= 2:
+            parts.append(f"failing {streak} runs in a row")
+        last = self._history.last_pass(report.nodeid)
+        if last is not None:
+            when, commit = last
+            text = f"last passed {ago(time.time() - when)}"
+            if commit:
+                since = commits_since(str(self.config.rootpath), commit)
+                if since == 0:
+                    text += ", on this very commit"
+                elif since:
+                    text += f" at {commit[:7]}, {since} commit{'s' if since != 1 else ''} ago"
+                else:
+                    text += f" at {commit[:7]}"  # rebased away, or another branch
+            parts.append(text)
+        elif "P" not in outcomes:
+            parts.append("never passed in the runs glow remembers")
+        return " · ".join(parts) or None
 
     def _print_warnings(self) -> None:
         warnings = self.stats.get("warnings", [])
@@ -1503,7 +1534,7 @@ class GlowReporter(TerminalReporter):
         measured = None
         if self._coverage is not None:
             measured = (self._coverage.total, {f.path: f.percent for f in self._coverage.files})
-        commit = head(str(self.config.rootpath)) if not failing else None
+        commit = head(str(self.config.rootpath))
         self._history.record(results, self._duration, ok=not failing, failed=failing, coverage=measured, commit=commit)
         self._history.tally(
             ok=not failing,

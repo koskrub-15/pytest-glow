@@ -66,6 +66,13 @@ class History:
         o = self.outcomes(nodeid)
         return len(o) - len(o.rstrip("FE"))
 
+    def last_pass(self, nodeid: str) -> tuple[int, str | None] | None:
+        """When the test last passed, and at which commit if git knew."""
+        p = self.tests.get(nodeid, {}).get("p")
+        if not p:
+            return None
+        return int(p[0]), (p[1] if len(p) > 1 else None)
+
     def personal_best(self, n_tests: int) -> float | None:
         return self.best.get(str(n_tests))
 
@@ -109,16 +116,20 @@ class History:
         coverage: tuple[float, dict[str, float]] | None = None,
         commit: str | None = None,
     ) -> None:
+        """``commit``: HEAD as the run saw it; the run keeps it when green, each passing test either way."""
+        now = round(time.time())
         for nodeid, (category, dur) in results.items():
             entry = self.tests.pop(nodeid, None) or {"o": "", "d": []}
             entry["o"] = (entry.get("o", "") + CODES.get(category, "?"))[-MAX_OUTCOMES:]
             if category in ("passed", "failed"):
                 entry["d"] = [*entry.get("d", []), round(dur, 4)][-MAX_DURATIONS:]
+            if category == "passed":
+                entry["p"] = [now, commit] if commit else [now]
             # Re-inserting keeps the dict ordered by recency, so the oldest go first.
             self.tests[nodeid] = entry
         while len(self.tests) > MAX_TESTS:
             self.tests.pop(next(iter(self.tests)))
-        run = {"t": round(time.time()), "d": round(duration, 3), "n": len(results), "f": failed, "ok": ok}
+        run = {"t": now, "d": round(duration, 3), "n": len(results), "f": failed, "ok": ok}
         self.greens = self.greens + 1 if ok else 0
         if ok:
             key = str(len(results))

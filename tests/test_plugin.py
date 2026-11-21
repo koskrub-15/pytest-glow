@@ -844,3 +844,28 @@ def test_glow_watch(pytester):
         assert proc.wait(timeout=30) == 0
     finally:
         proc.kill()
+
+
+def test_a_failure_remembers_when_and_where_it_last_passed(pytester, monkeypatch):
+    git = _git_repo(pytester)
+    pytester.makepyfile(test_m="import os\ndef test_m(): assert not os.environ.get('BREAK')\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "green")
+    run(pytester, "--glow")
+    monkeypatch.setenv("BREAK", "1")
+    _, out = run(pytester, "--glow")
+    assert "↳ last passed just now, on this very commit" in out
+    for n in range(2):
+        pytester.makefile(".txt", **{f"n{n}": "x"})
+        git("add", ".")
+        git("commit", "-q", "-m", f"change {n}")
+    _, out = run(pytester, "--glow")
+    assert re.search(r"↳ failing 2 runs in a row · last passed just now at [0-9a-f]{7}, 2 commits ago", out)
+
+
+def test_a_failure_that_never_passed(pytester):
+    pytester.makepyfile(test_n="def test_n(): assert False\n")
+    _, out = run(pytester, "--glow")
+    assert "↳ failing" not in out and "never passed" not in out  # nothing remembered yet
+    _, out = run(pytester, "--glow")
+    assert "↳ failing 2 runs in a row · never passed in the runs glow remembers" in out

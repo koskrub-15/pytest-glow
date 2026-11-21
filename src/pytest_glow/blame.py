@@ -77,6 +77,12 @@ def head(cwd: str) -> str | None:
     return out.strip() if out else None
 
 
+def commits_since(cwd: str, commit: str) -> int | None:
+    """How many commits HEAD is ahead of ``commit``."""
+    out = _git(cwd, "rev-list", "--count", f"{commit}..HEAD")
+    return int(out) if out and out.strip().isdigit() else None
+
+
 def changed_since(cwd: str, commit: str, since: float) -> list[str] | None:
     """Files under cwd that differ from ``commit`` and were touched after ``since``, newest first.
 
