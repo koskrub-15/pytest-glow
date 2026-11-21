@@ -91,7 +91,8 @@ class History:
             if not run.get("ok"):
                 break
             n += 1
-        return n
+        # only MAX_RUNS runs are kept: when they're all green, the streak may go back further
+        return max(n, self.greens) if n == len(self.runs) else n
 
     def last_coverage(self) -> float | None:
         for run in reversed(self.runs):

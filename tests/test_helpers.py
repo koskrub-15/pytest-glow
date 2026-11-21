@@ -544,3 +544,16 @@ def test_quests_start_over_each_day():
     fresh = quests.today(old, "x", typical=50, hour=12, has_best=False)
     assert fresh["day"] != "1999-01-01" and fresh["p"] == {} and len(fresh["q"]) == 3
     assert quests.today(fresh, "x", typical=50, hour=12, has_best=False) is fresh
+
+
+def test_green_streak_outlives_the_runs_kept():
+    from pytest_glow.history import MAX_RUNS, History
+
+    h = History(None)
+    for _ in range(MAX_RUNS + 15):
+        h.record({"a": ("passed", 0.1)}, 1.0, ok=True, failed=0)
+    assert len(h.runs) == MAX_RUNS
+    assert h.green_streak() == MAX_RUNS + 15
+    h.record({"a": ("failed", 0.1)}, 1.0, ok=False, failed=1)
+    h.record({"a": ("passed", 0.1)}, 1.0, ok=True, failed=0)
+    assert h.green_streak() == 1
