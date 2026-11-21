@@ -477,3 +477,22 @@ def test_watch_runs_the_same_command(monkeypatch):
         "tests",
         "--glow-ff",
     ]
+    assert watch.child_args(["x"], failed=True, pattern="cart")[-4:] == ["--glow-ff", "--lf", "-k", "cart"]
+    assert watch.child_args(["x"], debug=True)[-4:] == ["--glow-ff", "--lf", "--pdb", "-x"]
+
+
+def test_watch_keys_from_a_pipe():
+    import os
+
+    from pytest_glow import watch
+
+    read, write = os.pipe()
+    os.write(write, b"f\n\nquit\nmy pattern\n")
+    with open(read, "rb", buffering=0) as stream:
+        keys = watch.Keys(stream)
+        assert not keys.tty
+        assert [keys.key(1), keys.key(1), keys.key(1)] == ["f", "\n", "q"]
+        assert keys.line("?") == "my pattern"
+        assert keys.key(0.01) is None
+        os.close(write)
+        assert keys.key(1) == "q"  # closed: nobody left to type

@@ -839,9 +839,22 @@ def test_glow_watch(pytester):
         proc.stdin.write("\n")
         proc.stdin.flush()
         assert "run 3" in until("watching")
+        (pytester.path / "calc.py").write_text("def add(a, b):\n    return a * b - 4\n")
+        assert "1 failed" in until("watching")
+        proc.stdin.write("f\n")
+        proc.stdin.flush()
+        only = until("watching")
+        assert "run 5 · only failed" in only and "f all tests" in only
+        proc.stdin.write("p\nnothing_matches\n")
+        proc.stdin.flush()
+        assert "-k nothing_matches" in until("watching")
+        proc.stdin.write("\n")
+        proc.stdin.flush()
+        everything = until("watching")
+        assert "👀 glow watch · run 7\n" in everything  # no "only failed", no -k
         proc.stdin.write("q\n")
         proc.stdin.flush()
-        assert proc.wait(timeout=30) == 0
+        assert proc.wait(timeout=30) == 1
     finally:
         proc.kill()
 
