@@ -396,8 +396,10 @@ def test_lifetime_tally():
             shiny=False,
             boss="won" if ok else "lost",
             loot="🥄 Spoon" if ok else None,
+            quests=1,
         )
     life = h.life
+    assert life["quests"] == 3
     assert (life["runs"], life["greens"], life["tests"], life["failed"], life["xp"]) == (3, 2, 10, 1, 90)
     assert life["hours"][23] == 2 and life["hours"][9] == 1
     assert (life["boss_won"], life["boss_lost"]) == (2, 1)
@@ -477,3 +479,68 @@ def test_watch_runs_the_same_command(monkeypatch):
         "tests",
         "--glow-ff",
     ]
+    assert watch.child_args(["x"], failed=True, pattern="cart")[-4:] == ["--glow-ff", "--lf", "-k", "cart"]
+    assert watch.child_args(["x"], debug=True)[-4:] == ["--glow-ff", "--lf", "--pdb", "-x"]
+
+
+def test_watch_keys_from_a_pipe():
+    import os
+
+    from pytest_glow import watch
+
+    read, write = os.pipe()
+    os.write(write, b"f\n\nquit\nmy pattern\n")
+    with open(read, "rb", buffering=0) as stream:
+        keys = watch.Keys(stream)
+        assert not keys.tty
+        assert [keys.key(1), keys.key(1), keys.key(1)] == ["f", "\n", "q"]
+        assert keys.line("?") == "my pattern"
+        assert keys.key(0.01) is None
+        os.close(write)
+        assert keys.key(1) == "q"  # closed: nobody left to type
+
+
+def test_quests_are_the_same_all_day():
+    from pytest_glow import quests
+
+    a = quests.pick("2026-11-21", "shop", typical=200, hour=9, has_best=True)
+    assert a == quests.pick("2026-11-21", "shop", typical=200, hour=9, has_best=True)
+    assert len(a) == 3 and len({key for key, _ in a}) == 3
+    days = {
+        tuple(k for k, _ in quests.pick(f"2026-11-{d:02d}", "shop", typical=200, hour=9, has_best=True))
+        for d in range(1, 29)
+    }
+    assert len(days) > 5
+    late = [quests.pick(f"2026-11-{d:02d}", "x", typical=5, hour=23, has_best=False) for d in range(1, 29)]
+    assert not {key for day in late for key, _ in day} & {"early", "speed", "combo"}  # nothing out of reach
+
+
+def test_quests_progress_and_pay():
+    from pytest_glow import quests
+
+    state = {"day": "d", "q": [["greens", 3], ["combo", 50], ["comeback", 1]], "p": {}, "done": []}
+
+    def facts(**kw):
+        base = dict(ok=True, ran=10, fixed=0, max_combo=30, hour=12, new_pb=False, comeback=False, spotless=True)
+        return quests.RunFacts(**{**base, **kw})
+
+    assert quests.advance(state, facts()) == []
+    assert "3 green runs 1/3" in quests.lines(state, [])[0].plain
+    done = quests.advance(state, facts(max_combo=60, comeback=True))
+    assert [q.key for q, _ in done] == ["combo", "comeback"]
+    assert quests.xp(done, state) == 90
+    assert state["p"]["combo"] == 60  # the best run, not a sum
+    done = quests.advance(state, facts())
+    assert quests.swept(state) and quests.xp(done, state) == 40 + quests.SWEEP_XP
+    shown = [line.plain for line in quests.lines(state, done)]
+    assert "quest complete  3 green runs  +40 XP" in shown[0] and "all dailies done" in shown[1]
+    assert quests.advance(state, facts(max_combo=99)) == []  # done is done
+
+
+def test_quests_start_over_each_day():
+    from pytest_glow import quests
+
+    old = {"day": "1999-01-01", "q": [["greens", 3]], "p": {"greens": 2}, "done": []}
+    fresh = quests.today(old, "x", typical=50, hour=12, has_best=False)
+    assert fresh["day"] != "1999-01-01" and fresh["p"] == {} and len(fresh["q"]) == 3
+    assert quests.today(fresh, "x", typical=50, hour=12, has_best=False) is fresh

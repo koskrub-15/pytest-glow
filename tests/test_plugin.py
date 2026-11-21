@@ -839,8 +839,77 @@ def test_glow_watch(pytester):
         proc.stdin.write("\n")
         proc.stdin.flush()
         assert "run 3" in until("watching")
+        (pytester.path / "calc.py").write_text("def add(a, b):\n    return a * b - 4\n")
+        assert "1 failed" in until("watching")
+        proc.stdin.write("f\n")
+        proc.stdin.flush()
+        only = until("watching")
+        assert "run 5 · only failed" in only and "f all tests" in only
+        proc.stdin.write("p\nnothing_matches\n")
+        proc.stdin.flush()
+        assert "-k nothing_matches" in until("watching")
+        proc.stdin.write("\n")
+        proc.stdin.flush()
+        everything = until("watching")
+        assert "👀 glow watch · run 7\n" in everything  # no "only failed", no -k
         proc.stdin.write("q\n")
         proc.stdin.flush()
-        assert proc.wait(timeout=30) == 0
+        assert proc.wait(timeout=30) == 1
     finally:
         proc.kill()
+
+
+def test_a_failure_remembers_when_and_where_it_last_passed(pytester, monkeypatch):
+    git = _git_repo(pytester)
+    pytester.makepyfile(test_m="import os\ndef test_m(): assert not os.environ.get('BREAK')\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "green")
+    run(pytester, "--glow")
+    monkeypatch.setenv("BREAK", "1")
+    _, out = run(pytester, "--glow")
+    assert "↳ passed just now on this commit" in out
+    for n in range(2):
+        pytester.makefile(".txt", **{f"n{n}": "x"})
+        git("add", ".")
+        git("commit", "-q", "-m", f"change {n}")
+    _, out = run(pytester, "--glow")
+    assert re.search(r"↳ red for 2 runs, same failure · passed just now at [0-9a-f]{7}, 2 commits back", out)
+
+
+def test_a_failure_that_never_passed(pytester):
+    pytester.makepyfile(test_n="def test_n(): assert False\n")
+    _, out = run(pytester, "--glow")
+    assert "↳ red for" not in out and "never seen" not in out  # nothing remembered yet
+    _, out = run(pytester, "--glow")
+    assert "↳ red for 2 runs, same failure · never seen it pass" in out
+
+
+def test_a_failure_knows_if_it_fails_the_same_way(pytester, monkeypatch):
+    pytester.makepyfile(test_w="import os\ndef test_w(): assert os.environ.get('V') == 'ok'\n")
+    monkeypatch.setenv("V", "a")
+    run(pytester, "--glow")
+    _, out = run(pytester, "--glow")
+    assert "↳ red for 2 runs, same failure" in out
+    monkeypatch.setenv("V", "b")
+    _, out = run(pytester, "--glow")
+    assert "↳ red for 3 runs, a new failure" in out
+
+
+def test_daily_quests_in_the_verdict(pytester, monkeypatch):
+    monkeypatch.delenv("PYTEST_GLOW_QUESTS")
+    pytester.makeconftest(
+        "import pytest_glow.quests as q\nq.pick = lambda *a, **k: [['greens', 2], ['volume', 100], ['spotless', 1]]\n"
+    )
+    pytester.makepyfile("def test_a(): pass\n")
+    _, out = run(pytester, "--glow")
+    assert "quest complete  a green run, no warnings, no skips  +40 XP" in out
+    assert "✦ +66 XP" in out  # 1 + 25 for green + 40 for the quest
+    _, out = run(pytester, "--glow")
+    assert "quest complete  2 green runs" in out
+    assert "📜 dailies ✓ 2 green runs · run 100 tests 2/100 · ✓ a green run" in out
+
+
+def test_quests_can_be_turned_off(pytester):
+    pytester.makepyfile("def test_a(): pass\n")
+    _, out = run(pytester, "--glow")
+    assert "📜" not in out

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import platform
 import random
@@ -24,11 +25,11 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, hang, progress, render, rerun, share, sound
+from . import __version__, hang, progress, quests, render, rerun, share, sound
 from . import achievements as ach
 from . import coverage as cov
 from . import diff as assert_diff
-from .blame import ago, blame, changed_since, describe, head
+from .blame import ago, blame, changed_since, commits_since, describe, head
 from .boss import HEARTS, Fight, arena, drop, loot_line, outcome
 from .history import History, is_flaky
 from .order import GROUPS
@@ -120,6 +121,14 @@ def _signature(report: Any) -> tuple | None:
     return (report.when, str(crash.path), crash.lineno, _ADDRESS.sub("0x…", render.crash_message(report)))
 
 
+def fingerprint(report: Any) -> str | None:
+    """A short, stable hash of the failure's signature, to tell next run whether it fails the same way."""
+    signature = _signature(report)
+    if signature is None:
+        return None
+    return hashlib.blake2b(repr(signature).encode(), digest_size=4).hexdigest()
+
+
 def group_failures(failures: list) -> list[list]:
     """Failures grouped by signature, in the order each group first failed."""
     groups: dict[Any, list] = {}
@@ -196,6 +205,8 @@ class GlowReporter(TerminalReporter):
         self._loot: tuple[str, str] | None = None
         self._xp: tuple[int, int] | None = None  # (XP before this run, XP it earned)
         self._fixed = 0
+        self._quests: dict | None = None  # today's quests, this run counted in
+        self._quests_done: list = []  # the ones this run finished
         self._fight = Fight.for_project(config.rootpath.name) if flag(config, "boss") else None
         self._last_hit: float | None = None
         # sound only in an interactive terminal: never in CI or a pipe
@@ -816,6 +827,9 @@ class GlowReporter(TerminalReporter):
                 who = self._blame(report)
                 if who is not None:
                     self._print(Text.assemble(("  ↳ ", "dim"), (who, "dim italic")))
+                memory = self._memory(report)
+                if memory is not None:
+                    self._print(Text.assemble(("  ↳ ", "dim"), (memory, "dim italic")))
             if failure.traceback is not None:
                 render.shorten_paths(failure.traceback, str(self.config.invocation_params.dir))
                 self.console.print(failure.traceback)
@@ -907,6 +921,38 @@ class GlowReporter(TerminalReporter):
                 self._oldest_blame = max(age, self._oldest_blame or 0)
             return f"line {loc.lineno} {describe(found)}"
         return None
+
+    def _memory(self, report: Any) -> str | None:
+        """What the history remembers of a failing test: how long it's been red, and since which commit."""
+        if not self._history.enabled or not report.nodeid:
+            return None
+        outcomes = self._history.outcomes(report.nodeid)
+        if not outcomes:
+            return None
+        parts = []
+        streak = self._history.failing_streak(report.nodeid) + 1
+        if streak >= 2:
+            before, now = self._history.last_failure(report.nodeid), fingerprint(report)
+            how = ""
+            if before and now:
+                how = ", same failure" if before == now else ", a new failure"
+            parts.append(f"red for {streak} runs{how}")
+        last = self._history.last_pass(report.nodeid)
+        if last is not None:
+            when, commit = last
+            text = f"passed {ago(time.time() - when)}"
+            if commit:
+                since = commits_since(str(self.config.rootpath), commit)
+                if since == 0:
+                    text += " on this commit"
+                elif since:
+                    text += f" at {commit[:7]}, {since} commit{'s' if since != 1 else ''} back"
+                else:
+                    text += f" at {commit[:7]}"  # rebased away, or another branch
+            parts.append(text)
+        elif "P" not in outcomes:
+            parts.append("never seen it pass")
+        return " · ".join(parts) or None
 
     def _print_warnings(self) -> None:
         warnings = self.stats.get("warnings", [])
@@ -1279,6 +1325,28 @@ class GlowReporter(TerminalReporter):
             boss_won=self._boss_won(),
             shiny=self._shiny,
         )
+        if quests.enabled():
+            state = quests.today(
+                history.quests,
+                self.config.rootpath.name,
+                typical=self._done,
+                hour=self._hour,
+                has_best=bool(history.best),
+            )
+            last = history.runs[-1] if history.runs else None
+            did = quests.RunFacts(
+                ok=ok,
+                ran=self._counts.get("passed", 0) + self._counts.get("failed", 0),
+                fixed=self._fixed,
+                max_combo=self._max_combo,
+                hour=self._hour,
+                new_pb=self._new_pb is not None,
+                comeback=ok and last is not None and not last.get("ok"),
+                spotless=not self._counts.get("skipped", 0) and not self.stats.get("warnings"),
+            )
+            self._quests_done = quests.advance(state, did)
+            self._quests = history.quests = state
+            gained += quests.xp(self._quests_done, state)
         self._xp = (history.xp, gained)
 
     def _boss_won(self) -> bool:
@@ -1403,6 +1471,8 @@ class GlowReporter(TerminalReporter):
             lines.append(line4)
             if self._xp is not None:
                 lines.append(progress.xp_line(*self._xp))
+            if self._quests is not None:
+                lines += quests.lines(self._quests, self._quests_done)
 
         self.console.print()
         if self._failures and not getattr(self, "no_summary", False):
@@ -1442,7 +1512,7 @@ class GlowReporter(TerminalReporter):
 
         if self._live_enabled and not os.environ.get("CI"):
             confetti = None
-            if self._new_pb is not None or self._unlocked or self._leveled_up() or self._shiny:
+            if self._new_pb is not None or self._unlocked or self._leveled_up() or self._shiny or self._quests_done:
                 confetti = render.Confetti(self.console.width)
             length = CELEBRATE if confetti else REVEAL
 
@@ -1485,7 +1555,8 @@ class GlowReporter(TerminalReporter):
             word=word,
             stops=stops,
             counts=counts,
-            details=[line for line in details if not line.plain.startswith("runs ")],  # sparkline: too noisy for a card
+            # the sparkline and the dailies: too noisy for a card
+            details=[line for line in details if not line.plain.startswith(("runs ", "📜"))],
         )
         path = os.path.join(str(self.config.invocation_params.dir), self._share)
         try:
@@ -1503,8 +1574,21 @@ class GlowReporter(TerminalReporter):
         measured = None
         if self._coverage is not None:
             measured = (self._coverage.total, {f.path: f.percent for f in self._coverage.files})
-        commit = head(str(self.config.rootpath)) if not failing else None
-        self._history.record(results, self._duration, ok=not failing, failed=failing, coverage=measured, commit=commit)
+        commit = head(str(self.config.rootpath))
+        signatures: dict[str, str] = {}
+        for failure in self._failures:
+            found = fingerprint(failure.report)
+            if found is not None and failure.report.nodeid:
+                signatures.setdefault(failure.report.nodeid, found)
+        self._history.record(
+            results,
+            self._duration,
+            ok=not failing,
+            failed=failing,
+            coverage=measured,
+            commit=commit,
+            signatures=signatures,
+        )
         self._history.tally(
             ok=not failing,
             counts=dict(self._counts),
@@ -1516,5 +1600,6 @@ class GlowReporter(TerminalReporter):
             shiny=self._shiny,
             boss=None if self._fight is None else "won" if self._boss_won() else "lost",
             loot=self._loot[0] if self._loot else None,
+            quests=len(self._quests_done),
         )
         self._history.save()

@@ -58,6 +58,7 @@ def blame(path: str, line: int) -> Blame | None:
 
 
 def ago(seconds: float) -> str:
+    seconds = max(seconds, 0)  # times are kept to the second, rounded either way
     for unit, size in (("year", 365 * 86400), ("month", 30 * 86400), ("day", 86400), ("hour", 3600), ("minute", 60)):
         n = int(seconds // size)
         if n:
@@ -75,6 +76,12 @@ def describe(b: Blame, now: float | None = None) -> str:
 def head(cwd: str) -> str | None:
     out = _git(cwd, "rev-parse", "HEAD")
     return out.strip() if out else None
+
+
+def commits_since(cwd: str, commit: str) -> int | None:
+    """How many commits HEAD is ahead of ``commit``."""
+    out = _git(cwd, "rev-list", "--count", f"{commit}..HEAD")
+    return int(out) if out and out.strip().isdigit() else None
 
 
 def changed_since(cwd: str, commit: str, since: float) -> list[str] | None:

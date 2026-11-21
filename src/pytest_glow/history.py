@@ -43,6 +43,7 @@ class History:
         self.achievements: dict[str, int] = dict(data.get("achievements", {}))  # key -> when unlocked
         self.greens: int = int(data.get("greens", 0))  # green runs in a row, beyond the runs kept
         self.life: dict[str, Any] = dict(data.get("life", {}))  # totals since glow first ran here
+        self.quests: dict[str, Any] = dict(data.get("quests", {}))  # today's, and how far along
 
     @property
     def xp(self) -> int:
@@ -65,6 +66,17 @@ class History:
     def failing_streak(self, nodeid: str) -> int:
         o = self.outcomes(nodeid)
         return len(o) - len(o.rstrip("FE"))
+
+    def last_pass(self, nodeid: str) -> tuple[int, str | None] | None:
+        """When the test last passed, and at which commit if git knew."""
+        p = self.tests.get(nodeid, {}).get("p")
+        if not p:
+            return None
+        return int(p[0]), (p[1] if len(p) > 1 else None)
+
+    def last_failure(self, nodeid: str) -> str | None:
+        """The signature of how the test failed last run, if it did."""
+        return self.tests.get(nodeid, {}).get("s")
 
     def personal_best(self, n_tests: int) -> float | None:
         return self.best.get(str(n_tests))
@@ -108,17 +120,30 @@ class History:
         failed: int,
         coverage: tuple[float, dict[str, float]] | None = None,
         commit: str | None = None,
+        signatures: dict[str, str] | None = None,
     ) -> None:
+        """``commit``: HEAD as the run saw it; the run keeps it when green, each passing test either way.
+
+        ``signatures``: how each failing test failed, so the next run can tell the same failure from a new one.
+        """
+        now = round(time.time())
         for nodeid, (category, dur) in results.items():
             entry = self.tests.pop(nodeid, None) or {"o": "", "d": []}
             entry["o"] = (entry.get("o", "") + CODES.get(category, "?"))[-MAX_OUTCOMES:]
             if category in ("passed", "failed"):
                 entry["d"] = [*entry.get("d", []), round(dur, 4)][-MAX_DURATIONS:]
+            if category == "passed":
+                entry["p"] = [now, commit] if commit else [now]
+            signature = (signatures or {}).get(nodeid)
+            if signature is None:
+                entry.pop("s", None)
+            else:
+                entry["s"] = signature
             # Re-inserting keeps the dict ordered by recency, so the oldest go first.
             self.tests[nodeid] = entry
         while len(self.tests) > MAX_TESTS:
             self.tests.pop(next(iter(self.tests)))
-        run = {"t": round(time.time()), "d": round(duration, 3), "n": len(results), "f": failed, "ok": ok}
+        run = {"t": now, "d": round(duration, 3), "n": len(results), "f": failed, "ok": ok}
         self.greens = self.greens + 1 if ok else 0
         if ok:
             key = str(len(results))
@@ -144,6 +169,7 @@ class History:
         shiny: bool,
         boss: str | None = None,
         loot: str | None = None,
+        quests: int = 0,
     ) -> None:
         """Add a run to the lifetime totals. ``boss``: "won" or "lost" when there was a fight."""
         life = self.life
@@ -161,6 +187,7 @@ class History:
         add("xp", xp)
         add("fixed", fixed)
         add("shiny", int(shiny))
+        add("quests", quests)
         if boss:
             add(f"boss_{boss}", 1)
         life["best_combo"] = max(life.get("best_combo", 0), max_combo)
@@ -185,6 +212,7 @@ class History:
                     "achievements": self.achievements,
                     "greens": self.greens,
                     "life": self.life,
+                    "quests": self.quests,
                 },
             )
 
