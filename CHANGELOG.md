@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-21
+
 - Under each failure, what its history says: red for how many runs, the same failure or a new one, and when
   and at which commit it last passed.
 - Watch mode keys: `f` only failed, `p` a `-k` pattern, `d` the failures in pdb, enter all, `q` quit.
