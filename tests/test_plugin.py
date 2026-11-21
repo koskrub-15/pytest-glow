@@ -958,3 +958,13 @@ def test_no_profile_unless_asked(pytester):
     _profiled_project(pytester)
     _, out = run(pytester, "--glow")
     assert "in tests went" not in out and "↳ test" not in out
+
+
+def test_pace_compares_with_a_run_of_as_many_tests(pytester):
+    pytester.makepyfile(test_p="import pytest\n@pytest.mark.parametrize('i', range(3))\ndef test_p(i): pass\n")
+    run(pytester, "--glow")
+    _, out = run(pytester, "--glow")
+    assert re.search(r"(same pace as|faster than|slower than) last run", out)
+    run(pytester, "--glow", "-k", "0")
+    _, out = run(pytester, "--glow")
+    assert re.search(r"(same pace as|faster than|slower than) the last run of 3 tests", out)

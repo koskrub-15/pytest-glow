@@ -1510,12 +1510,14 @@ class GlowReporter(TerminalReporter):
         prev = self._history.last_comparable_run(self._done) if self._done else None
         if prev and exitstatus != pytest.ExitCode.INTERRUPTED:
             delta = duration - prev.get("d", duration)
+            # only a run of as many tests compares; when that's not the last one, say which it is
+            than = "last run" if prev is self._history.runs[-1] else f"the last run of {self._done} tests"
             if abs(delta) < 0.05 or abs(delta) / max(prev.get("d", 1), 1e-9) < 0.05:
-                line3.append("  · same pace as last run", style="dim")
+                line3.append(f"  · same pace as {than}", style="dim")
             elif delta < 0:
-                line3.append(f"  · ▼ {render.fmt_dur(-delta)} faster than last run", style="green")
+                line3.append(f"  · ▼ {render.fmt_dur(-delta)} faster than {than}", style="green")
             else:
-                line3.append(f"  · ▲ {render.fmt_dur(delta)} slower than last run", style="yellow")
+                line3.append(f"  · ▲ {render.fmt_dur(delta)} slower than {than}", style="yellow")
         if self._workers:
             line3.append(f"  · {len(self._workers)} workers", style="dim")
         if self._max_combo >= 25:
