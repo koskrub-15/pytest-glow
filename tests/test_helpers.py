@@ -557,3 +557,25 @@ def test_green_streak_outlives_the_runs_kept():
     h.record({"a": ("failed", 0.1)}, 1.0, ok=False, failed=1)
     h.record({"a": ("passed", 0.1)}, 1.0, ok=True, failed=0)
     assert h.green_streak() == 1
+
+
+def test_profile_classifies_frames(tmp_path):
+    import json
+    import os
+
+    from pytest_glow import profile
+
+    sampler = profile.Sampler(str(tmp_path), ["test_*.py"])
+
+    def code_at(path):
+        return compile("x = 1", path, "exec")
+
+    assert sampler.classify(code_at(str(tmp_path / "test_cart.py"))) == ("test", "")
+    assert sampler.classify(code_at(str(tmp_path / "conftest.py"))) == ("test", "")
+    assert sampler.classify(code_at(str(tmp_path / "shop" / "cart.py"))) == ("code", "")
+    venv = tmp_path / ".venv" / "lib" / "site-packages" / "requests" / "api.py"
+    assert sampler.classify(code_at(str(venv))) == ("lib", "requests")
+    assert sampler.classify(json.dumps.__code__) == ("lib", "json")
+    assert sampler.classify(code_at("<frozen importlib._bootstrap>")) == ("lib", "imports")
+    assert sampler.classify(code_at(os.path.join("x", "_pytest", "runner.py"))) is None
+    assert profile.split(2.0, {"test": 1, "code": 3, "lib": 0}) == {"test": 0.5, "code": 1.5, "lib": 0.0}

@@ -29,6 +29,7 @@ from . import __version__, hang, progress, quests, render, rerun, share, sound
 from . import achievements as ach
 from . import coverage as cov
 from . import diff as assert_diff
+from . import profile as prof
 from .blame import ago, blame, changed_since, commits_since, describe, head
 from .boss import HEARTS, Fight, arena, drop, loot_line, outcome
 from .history import History, is_flaky
@@ -54,6 +55,8 @@ COMBO_SHOWN = 10  # passes in a row before the live view starts counting a combo
 COMBO_BROKEN = 1.5  # seconds a broken combo stays on screen
 MAX_RERUN_IDS = 3  # beyond this, the rerun hint is `pytest --lf`
 SHINY_ODDS = 1 / 500  # the chance that a green run comes out shiny
+MIN_SAMPLES = 10  # fewer samples of a test than this, and its shares are noise
+PROFILE_STYLES = {"fixtures": "#6b7280", "test": "#22d3ee", "code": "#e879f9", "lib": "#facc15"}
 SLOWER = 2.0  # a test this many times its usual duration (and 100ms more) is called out
 
 
@@ -76,6 +79,8 @@ class TestState:
     outcome: str | None = None
     duration: float = 0.0
     finished: bool = False
+    fixtures: float = 0.0  # setup and teardown
+    profile: dict | None = None  # --glow-profile's samples of the call
 
 
 @dataclass
@@ -164,6 +169,11 @@ class GlowReporter(TerminalReporter):
         self._link = link_template() if self._live_enabled else None
         self._locations: dict[str, tuple] = {}  # nodeid -> (path from the rootdir, 0-based line)
         self._fixtures: dict[tuple[str, str], FixtureTime] = {}  # (name, scope) -> time spent in it
+        self._profiled = Counter()  # --glow-profile: samples over the whole run, by kind and by library
+        self._profiled_libs = Counter()
+        self._call_time = 0.0  # in the test bodies, sampled or too short to be
+        self._fixture_time = 0.0
+        self._fixture_spent: Counter = Counter()  # in setup and teardown: seconds by library, "your code"…
         self._live: Live | None = None
         self._lock = threading.RLock()
         self._capture_off = config.getoption("capture", "fd") == "no"
@@ -509,6 +519,23 @@ class GlowReporter(TerminalReporter):
         with self._lock:
             ts = self._tests.setdefault(report.nodeid, TestState())
             ts.duration += report.duration
+            if report.when == "call":
+                self._call_time += report.duration
+                sampled = prof.profile(report)
+                if sampled is not None:
+                    ts.profile = sampled
+                    self._profiled.update({k: sampled.get(k, 0) for k in prof.KINDS})
+                    self._profiled_libs.update(sampled.get("libs", {}))
+            else:
+                ts.fixtures += report.duration
+                self._fixture_time += report.duration
+                sampled = prof.profile(report)
+                if sampled is not None:
+                    samples = sum(sampled.get(k, 0) for k in prof.KINDS)
+                    per_sample = report.duration / samples if samples else 0
+                    self._fixture_spent["your code"] += sampled.get("code", 0) * per_sample
+                    for name, n in sampled.get("libs", {}).items():
+                        self._fixture_spent[name] += n * per_sample
             if category and ts.outcome not in render.FAILING:
                 ts.outcome = category
             if report.failed:
@@ -782,6 +809,7 @@ class GlowReporter(TerminalReporter):
         if show:
             self._print_slowest()
             self._print_fixtures()
+            self._print_profile()
             self._print_insights()
             self._print_achievements()
             self._print_changes()
@@ -1084,7 +1112,70 @@ class GlowReporter(TerminalReporter):
                 trend(nodeid, dur),
                 compare,
             )
+            breakdown = self._breakdown(self._tests[nodeid])
+            if breakdown:
+                table.add_row("", "", breakdown)
         self.console.print(table)
+
+    def _breakdown(self, ts: TestState) -> Text:
+        """--glow-profile: the test's time as shares of the test itself, your code, libraries and fixtures."""
+        sampled = ts.profile
+        if sampled is None or sum(sampled.get(k, 0) for k in prof.KINDS) < MIN_SAMPLES or not ts.duration:
+            return Text()
+        spent = prof.split(ts.duration - ts.fixtures, sampled)
+        spent["fixtures"] = ts.fixtures
+        top_lib = next(iter(sampled.get("libs", {})), None)
+        text = Text("↳ ", style="dim")
+        for kind, label in (("test", "test"), ("code", "your code"), ("lib", "libs"), ("fixtures", "fixtures")):
+            share = spent.get(kind, 0) / ts.duration
+            if share < 0.01:
+                continue
+            if len(text) > 2:
+                text.append(" · ", style="dim")
+            text.append(f"{label} ", style="dim")
+            text.append(f"{share:.0%}", style=PROFILE_STYLES[kind])
+            if kind == "lib" and top_lib:
+                text.append(f" ({top_lib})", style="dim")
+        return text if len(text) > 2 else Text()
+
+    def _print_profile(self) -> None:
+        """--glow-profile: where the time in tests went, over the whole run."""
+        samples = sum(self._profiled.values())
+        if not samples and not self._fixture_spent:
+            return
+        spent = prof.split(self._call_time, self._profiled)
+        spent["fixtures"] = self._fixture_time
+        total = sum(spent.values())
+        if total < 0.05:
+            return
+        per_sample = self._call_time / samples if samples else 0
+        self.console.print()
+        self.console.print(Text(f"  where {render.fmt_dur(total)} in tests went", style="bold dim"))
+        width = min(60, max(10, self.console.width - 6))
+        bar = Text("  ")
+        shown = 0
+        kinds = ("fixtures", "test", "code", "lib")
+        for i, kind in enumerate(kinds):
+            cells = width - shown if i == len(kinds) - 1 else round(spent[kind] / total * width)
+            bar.append("█" * cells, style=PROFILE_STYLES[kind])
+            shown += cells
+        self.console.print(bar)
+        legend = Text("  ")
+        for kind, label in (("fixtures", "fixtures"), ("test", "tests"), ("code", "your code"), ("lib", "libraries")):
+            if legend.plain.strip():
+                legend.append("  ")
+            legend.append("■ ", style=PROFILE_STYLES[kind])
+            legend.append(f"{label} ", style="dim")
+            legend.append(render.fmt_dur(spent[kind]), style="bold")
+        self._print(legend)
+        libs = [(name, n * per_sample) for name, n in self._profiled_libs.most_common(5)]
+        fixtures = self._fixture_spent.most_common(5)
+        for title, spent_in in (("in fixtures", fixtures), ("in libraries", libs)):
+            spent_in = [(name, sec) for name, sec in spent_in if sec >= 0.01]
+            if spent_in:
+                line = Text(f"    {title}: ", style="dim")
+                line.append(", ".join(f"{name} {render.fmt_dur(sec)}" for name, sec in spent_in), style="dim")
+                self._print(line)
 
     def _print_fixtures(self) -> None:
         ranked = sorted(self._fixtures.items(), key=lambda item: -item[1].total)[:5]

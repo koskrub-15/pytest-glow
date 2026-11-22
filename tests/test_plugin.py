@@ -913,3 +913,48 @@ def test_quests_can_be_turned_off(pytester):
     pytester.makepyfile("def test_a(): pass\n")
     _, out = run(pytester, "--glow")
     assert "📜" not in out
+
+
+_BUSY = (
+    "import time\n"
+    "def busy(seconds):\n"
+    "    end = time.perf_counter() + seconds\n"
+    "    while time.perf_counter() < end:\n"
+    "        pass\n"
+)
+
+
+def _profiled_project(pytester):
+    pytester.makepyfile(
+        shop=_BUSY,
+        test_slow=(
+            "import time, pytest\nfrom shop import busy\n"
+            "@pytest.fixture\ndef warm():\n    busy(0.2)\n"
+            "def test_slow(warm):\n    busy(0.4)\n"
+            "    end = time.perf_counter() + 0.1\n    while time.perf_counter() < end:\n        pass\n"
+        ),
+    )
+
+
+def test_glow_profile(pytester):
+    _profiled_project(pytester)
+    _, out = run(pytester, "--glow", "--glow-profile")
+    found = re.search(r"↳ test (\d+)% · your code (\d+)% · fixtures (\d+)%", out)
+    assert found, out
+    test, code, fixtures = map(int, found.groups())
+    assert 5 <= test <= 30 and 45 <= code <= 75 and 15 <= fixtures <= 45
+    assert re.search(r"where \S+ in tests went", out)
+    assert re.search(r"in fixtures: your code \d+ms", out)
+
+
+def test_glow_profile_under_xdist(pytester):
+    pytest.importorskip("xdist")
+    _profiled_project(pytester)
+    _, out = run(pytester, "--glow", "--glow-profile", "-n", "2")
+    assert re.search(r"↳ test \d+% · your code \d+%", out)
+
+
+def test_no_profile_unless_asked(pytester):
+    _profiled_project(pytester)
+    _, out = run(pytester, "--glow")
+    assert "in tests went" not in out and "↳ test" not in out
