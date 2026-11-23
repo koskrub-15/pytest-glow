@@ -28,6 +28,7 @@ from rich.text import Text
 
 from . import __version__, advice, hang, progress, quests, render, rerun, share, sound
 from . import achievements as ach
+from . import affected as aff
 from . import coverage as cov
 from . import diff as assert_diff
 from . import profile as prof
@@ -35,7 +36,7 @@ from .blame import ago, blame, changed_since, commits_since, describe, head
 from .boss import HEARTS, Fight, arena, drop, loot_line, outcome
 from .history import History, is_flaky
 from .order import GROUPS
-from .plugin import ORDERED, flag
+from .plugin import AFFECTED, ORDERED, flag
 
 SUMMARY_EXIT_CODES = (
     pytest.ExitCode.OK,
@@ -439,12 +440,51 @@ class GlowReporter(TerminalReporter):
         if self._workers:
             bits.append(Text.assemble((str(len(self._workers)), "bold"), (" workers", "dim")))
         self._print(Text("   ") + Text(" · ", style="dim").join(bits))
+        affected = self._affected_line()
+        if affected is not None:
+            self._print(affected)
         first = self.config.stash.get(ORDERED, None)
         if first:
             line = Text.assemble(("   ↯ first: ", "bold #facc15"))
             names = [Text.assemble((str(first[g]), "bold"), (f" {g}", "dim")) for g in GROUPS if first[g]]
             self._print(line + Text(" · ", style="dim").join(names))
         self._print()
+
+    def _nothing_affected(self) -> bool:
+        choice = self.config.stash.get(AFFECTED, {}).get("choice")
+        return choice is not None and not choice.selected and bool(choice.deselected)
+
+    def _affected_line(self) -> Text | None:
+        """--glow-affected: how many tests it picked, and why."""
+        affected = self.config.stash.get(AFFECTED, None)
+        if affected is None:
+            return None
+        line = Text("   ◎ affected: ", style="bold #22d3ee")
+        if "unsupported" in affected:
+            return line.append(f"{affected['unsupported']}, so all of them", style="dim")
+        choice = affected.get("choice")
+        if choice is None:  # an xdist controller: the workers pick
+            changed = sorted(aff.changed_since(affected["stored"], affected["files"]))
+            line.append("picked by the workers", style="dim")
+            if changed:
+                files = "1 file" if len(changed) == 1 else f"{len(changed)} files"
+                line.append(f" · {files} changed: {', '.join(changed[:3])}", style="dim")
+            return line
+        if choice.everything:
+            return line.append(f"all of them · {choice.everything}", style="dim")
+        total = len(choice.selected) + len(choice.deselected)
+        if not choice.selected:
+            return line.append(f"none of {total} tests · nothing they use changed since they passed", style="dim")
+        line.append(str(len(choice.selected)), style="bold")
+        line.append(f" of {total} tests", style="dim")
+        for reason in ("changed", "new", "failing"):
+            if choice.why[reason]:
+                line.append(" · ", style="dim")
+                line.append(f"{choice.why[reason]} {reason}", style="dim")
+        if choice.changed:
+            more = f" +{len(choice.changed) - 3}" if len(choice.changed) > 3 else ""
+            line.append(f"  ({', '.join(choice.changed[:3])}{more})", style="dim")
+        return line
 
     # -- running tests -----------------------------------------------------------------
 
@@ -1559,6 +1599,8 @@ class GlowReporter(TerminalReporter):
             icon, word, st = "◌", "interrupted", "yellow"
         elif failing or exitstatus not in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED):
             icon, word, st = "✗", "failed", "red"
+        elif not self._done and self._nothing_affected():
+            icon, word, st = "◎", "nothing changed", "cyan"
         elif exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED or not self._done:
             icon, word, st = "∅", "no tests ran", "grey50"
         else:
