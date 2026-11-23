@@ -95,6 +95,11 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
   (the same boss every time), every failure costs you one of three hearts. Below half its HP it gets
   ENRAGED, below a tenth it makes its LAST STAND, and once slain it drops loot: sixteen items, common to
   legendary, to collect per project
+- `pytest --glow-graph`: your tests and the code they run, as a graph in the browser, like Obsidian's. Files
+  sized by how many tests use them, tests coloured by how they've been doing, hubs in the middle. Click
+  a file to see what editing it would run, a test to see what it touches; drag, zoom, search, or group the
+  tests by file. Built from `--glow-affected`'s map, so run with that once first. One HTML file, no network;
+  `--glow-graph=graph.html` saves it there instead of opening it
 - `pytest --glow-wrapped`: your project's year-in-review. Runs, time spent, green rate, level, records, a hall
   of shame (failed the most, flakiest, slowest), who you were this week (🦉 Night Owl, 🔁 Rerun Goblin, 🩹 Medic,
   🐇 Speed Demon…), the hours you test at, loot and achievements. Runs no tests
@@ -145,6 +150,7 @@ Just run `pytest`. Everything else is optional:
 | `--glow-rerun[=N]` or `PYTEST_GLOW_RERUN=N` | rerun a failed test up to N times (1 by default) and call out flaky ones; `glow_rerun = N` in the ini |
 | `PYTEST_GLOW_SUMMARY=0` | no job summary on GitHub Actions; `glow_summary = false` in the ini |
 | `PYTEST_GLOW_QUESTS=0` | no daily quests |
+| `--glow-graph[=PATH]` | draw the tests and the files they use as a graph in the browser and exit |
 | `--glow-wrapped` | show everything glow remembers about the project and exit; with `--glow-share`, save it as SVG |
 | `PYTEST_GLOW_LINK` | where clickable paths go, e.g. `pycharm://open?file={path}&line={line}`; `off` to turn them off |
 | `-v` | also list every test as it finishes |
