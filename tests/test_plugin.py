@@ -976,7 +976,7 @@ def test_glow_profile(pytester):
     _profiled_project(pytester)
     _, out = run(pytester, "--glow", "--glow-profile")
     # a few samples can land in the stdlib (contextlib, around the fixture): "libs 1% (contextlib)" in between
-    found = re.search(r"↳ test (\d+)% · your code (\d+)% ·(?: libs \d+% \(\w+\) ·)?\s+fixtures (\d+)%", out)
+    found = re.search(r"↳ test (\d+)% ·\s+your code (\d+)% ·\s+(?:libs \d+% \(\w+\) ·\s+)?fixtures (\d+)%", out)
     assert found, out
     test, code, fixtures = map(int, found.groups())
     assert re.search(r"\d+ms  ━{12}  test_slow\.py::test_slow", out), out  # the time and bar aren't squeezed

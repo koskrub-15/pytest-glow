@@ -1136,7 +1136,8 @@ class GlowReporter(TerminalReporter):
         self.console.print(Text("  slowest", style="bold dim"))
         table = Table.grid(padding=(0, 2))
         # the widths: a long --glow-profile breakdown would squeeze the times and bars otherwise
-        table.add_column(justify="right", no_wrap=True, min_width=2 + max(len(render.fmt_dur(d)) for d, _ in slowest))
+        time_width = 2 + max(len(render.fmt_dur(d)) for d, _ in slowest)
+        table.add_column(justify="right", no_wrap=True, min_width=time_width)
         table.add_column(no_wrap=True, min_width=12)
         table.add_column(no_wrap=True, overflow="ellipsis")
         table.add_column(no_wrap=True)
@@ -1162,31 +1163,43 @@ class GlowReporter(TerminalReporter):
                 trend(nodeid, dur),
                 compare,
             )
-            breakdown = self._breakdown(self._tests[nodeid])
+            breakdown = self._breakdown(self._tests[nodeid], self.console.width - time_width - 2 - 12 - 2)
             if breakdown:
                 table.add_row("", "", breakdown)
         self.console.print(table)
 
-    def _breakdown(self, ts: TestState) -> Text:
-        """--glow-profile: the test's time as shares of the test itself, your code, libraries and fixtures."""
+    def _breakdown(self, ts: TestState, width: int) -> Text:
+        """--glow-profile: the test's time as shares of the test itself, your code, libraries and fixtures; on as
+        many lines of ``width`` as it takes, broken between the shares (rich would break a word)."""
         sampled = ts.profile
         if sampled is None or sum(sampled.get(k, 0) for k in prof.KINDS) < MIN_SAMPLES or not ts.duration:
             return Text()
         spent = prof.split(ts.duration - ts.fixtures, sampled)
         spent["fixtures"] = ts.fixtures
         top_lib = next(iter(sampled.get("libs", {})), None)
-        text = Text("↳ ", style="dim", no_wrap=False, overflow="fold")  # wraps rather than cut a share off
+        pieces = []
         for kind, label in (("test", "test"), ("code", "your code"), ("lib", "libs"), ("fixtures", "fixtures")):
             share = spent.get(kind, 0) / ts.duration
             if share < 0.01:
                 continue
-            if len(text) > 2:
-                text.append(" · ", style="dim")
-            text.append(f"{label} ", style="dim")
-            text.append(f"{share:.0%}", style=PROFILE_STYLES[kind])
+            piece = Text.assemble((f"{label} ", "dim"), (f"{share:.0%}", PROFILE_STYLES[kind]))
             if kind == "lib" and top_lib:
-                text.append(f" ({top_lib})", style="dim")
-        return text if len(text) > 2 else Text()
+                piece.append(f" ({top_lib})", style="dim")
+            pieces.append(piece)
+        if not pieces:
+            return Text()
+        text = Text("↳ ", style="dim")
+        line = 2
+        for i, piece in enumerate(pieces):
+            if i and line + 3 + len(piece) > width:
+                text.append(" ·\n  ", style="dim")
+                line = 2
+            elif i:
+                text.append(" · ", style="dim")
+                line += 3
+            text.append_text(piece)
+            line += len(piece)
+        return text
 
     def _print_profile(self) -> None:
         """--glow-profile: where the time in tests went, over the whole run."""

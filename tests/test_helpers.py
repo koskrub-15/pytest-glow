@@ -607,3 +607,14 @@ def test_ghost_race():
     assert race(done=40, since=5.0) == "▼ 1.0s behind"
     assert race(done=1, since=0.5) is None  # too early to tell
     assert race(done=60, since=5.0, best=None) is None
+
+
+def test_profile_breakdown_breaks_between_shares():
+    from types import SimpleNamespace
+
+    from pytest_glow.reporter import GlowReporter, TestState
+
+    ts = TestState(duration=0.7, fixtures=0.2, profile={"test": 15, "code": 55, "lib": 2, "libs": {"contextlib": 2}})
+    breakdown = GlowReporter._breakdown(SimpleNamespace(), ts, 57).plain
+    assert breakdown == "↳ test 15% · your code 55% · libs 2% (contextlib) ·\n  fixtures 29%"
+    assert "\n" not in GlowReporter._breakdown(SimpleNamespace(), ts, 80).plain
