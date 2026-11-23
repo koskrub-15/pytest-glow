@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format follows
 
 - `--glow-affected`: runs only the tests what you changed can affect, from which project files each test ran
   code from last time (Python 3.12+, `sys.monitoring`); new tests and failures too, everything when it can't tell.
+- Watch mode: `c` switches between only the affected tests and all of them, on every save.
 - `--glow-profile`: where a test's time goes, the test itself, your code, libraries or fixtures, by sampling
   its stack; per slow test and for the whole run, with the libraries that take the most.
 - Assertion diffs under xdist too, and for `in`: the near misses when it isn't there, where it is for `not in`.

@@ -860,28 +860,44 @@ def test_glow_watch(pytester):
                 return "".join(seen)
 
     try:
-        first = until("watching")
+        first = until("q quit")
         assert "glow watch · run 1" in first and "1 failed" in first
         (pytester.path / "calc.py").write_text("def add(a, b):\n    return a + b\n")
-        second = until("watching")
+        second = until("q quit")
         assert "run 2 · changed calc.py" in second
         assert "1 passed" in second
         proc.stdin.write("\n")
         proc.stdin.flush()
-        assert "run 3" in until("watching")
+        assert "run 3" in until("q quit")
         (pytester.path / "calc.py").write_text("def add(a, b):\n    return a * b - 4\n")
-        assert "1 failed" in until("watching")
+        assert "1 failed" in until("q quit")
         proc.stdin.write("f\n")
         proc.stdin.flush()
-        only = until("watching")
+        only = until("q quit")
         assert "run 5 · only failed" in only and "f all tests" in only
         proc.stdin.write("p\nnothing_matches\n")
         proc.stdin.flush()
-        assert "-k nothing_matches" in until("watching")
+        assert "-k nothing_matches" in until("q quit")
         proc.stdin.write("\n")
         proc.stdin.flush()
-        everything = until("watching")
+        everything = until("q quit")
         assert "👀 glow watch · run 7\n" in everything  # no "only failed", no -k
+        from pytest_glow.affected import supported
+
+        if supported():
+            assert "c only affected" in everything
+            (pytester.path / "test_other.py").write_text("def test_other():\n    pass\n")
+            assert "run 8 · changed test_other.py" in until("q quit")
+            proc.stdin.write("c\n")
+            proc.stdin.flush()
+            on = until("q quit")
+            assert "run 9 · only affected" in on and "c every test" in on  # learning: all of them
+            (pytester.path / "calc.py").write_text("def add(a, b):\n    return a * b - 3\n")
+            saved = until("q quit")
+            assert "run 10 · only affected · changed calc.py" in saved and "1 failed, 1 deselected" in saved
+            proc.stdin.write("\n")
+            proc.stdin.flush()
+            assert "👀 glow watch · run 11\n" in until("q quit")  # enter: everything, once
         proc.stdin.write("q\n")
         proc.stdin.flush()
         assert proc.wait(timeout=30) == 1
