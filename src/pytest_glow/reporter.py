@@ -20,12 +20,13 @@ import pytest
 from _pytest.terminal import TerminalReporter
 from rich.console import Console, Group
 from rich.live import Live
+from rich.padding import Padding
 from rich.panel import Panel
 from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, hang, progress, quests, render, rerun, share, sound
+from . import __version__, advice, hang, progress, quests, render, rerun, share, sound
 from . import achievements as ach
 from . import coverage as cov
 from . import diff as assert_diff
@@ -169,11 +170,13 @@ class GlowReporter(TerminalReporter):
         self._link = link_template() if self._live_enabled else None
         self._locations: dict[str, tuple] = {}  # nodeid -> (path from the rootdir, 0-based line)
         self._fixtures: dict[tuple[str, str], FixtureTime] = {}  # (name, scope) -> time spent in it
+        self._my_fixtures: set[str] = set()  # the ones defined in the project, rather than in pytest or a plugin
         self._profiled = Counter()  # --glow-profile: samples over the whole run, by kind and by library
         self._profiled_libs = Counter()
         self._call_time = 0.0  # in the test bodies, sampled or too short to be
         self._fixture_time = 0.0
         self._fixture_spent: Counter = Counter()  # in setup and teardown: seconds by library, "your code"…
+        self._slept: Counter = Counter()  # nodeid -> seconds in time.sleep
         self._live: Live | None = None
         self._lock = threading.RLock()
         self._capture_off = config.getoption("capture", "fd") == "no"
@@ -483,7 +486,12 @@ class GlowReporter(TerminalReporter):
 
     @pytest.hookimpl(wrapper=True)
     def pytest_fixture_setup(self, fixturedef: Any, request: pytest.FixtureRequest):
-        spent = self._fixtures.setdefault((fixturedef.argname, fixturedef.scope), FixtureTime())
+        key = (fixturedef.argname, fixturedef.scope)
+        spent = self._fixtures.get(key)
+        if spent is None:
+            spent = self._fixtures[key] = FixtureTime()
+            if self._mine(getattr(getattr(fixturedef.func, "__code__", None), "co_filename", "")):
+                self._my_fixtures.add(fixturedef.argname)
         started: list[float] = []
 
         def tearing_down() -> None:
@@ -519,6 +527,9 @@ class GlowReporter(TerminalReporter):
         with self._lock:
             ts = self._tests.setdefault(report.nodeid, TestState())
             ts.duration += report.duration
+            slept = (prof.profile(report) or {}).get("sleep")
+            if slept:
+                self._slept[report.nodeid] += slept
             if report.when == "call":
                 self._call_time += report.duration
                 sampled = prof.profile(report)
@@ -533,7 +544,9 @@ class GlowReporter(TerminalReporter):
                 if sampled is not None:
                     samples = sum(sampled.get(k, 0) for k in prof.KINDS)
                     per_sample = report.duration / samples if samples else 0
-                    self._fixture_spent["your code"] += sampled.get("code", 0) * per_sample
+                    # a fixture's own code, in a conftest or a test file, is your code too
+                    mine = sampled.get("code", 0) + sampled.get("test", 0)
+                    self._fixture_spent["your code"] += mine * per_sample
                     for name, n in sampled.get("libs", {}).items():
                         self._fixture_spent[name] += n * per_sample
             if category and ts.outcome not in render.FAILING:
@@ -802,7 +815,10 @@ class GlowReporter(TerminalReporter):
                 self._print(Text(f"Tests pass, but maximum allowed warnings exceeded: {n} > {max_warnings}", "red"))
         self._duration = time.monotonic() - self._t_start
         self._shiny = bool(
-            self._done and not self._failing() and exitstatus == pytest.ExitCode.OK and random.random() < float(os.environ.get("PYTEST_GLOW_SHINY_ODDS", SHINY_ODDS))
+            self._done
+            and not self._failing()
+            and exitstatus == pytest.ExitCode.OK
+            and random.random() < float(os.environ.get("PYTEST_GLOW_SHINY_ODDS", SHINY_ODDS))
         )
         if self._boss_won() and exitstatus == pytest.ExitCode.OK:
             self._loot = drop()
@@ -811,6 +827,7 @@ class GlowReporter(TerminalReporter):
             self._print_slowest()
             self._print_fixtures()
             self._print_profile()
+            self._print_tips()
             self._print_insights()
             self._print_achievements()
             self._print_changes()
@@ -1177,11 +1194,35 @@ class GlowReporter(TerminalReporter):
         libs = [(name, n * per_sample) for name, n in self._profiled_libs.most_common(5)]
         fixtures = self._fixture_spent.most_common(5)
         for title, spent_in in (("in fixtures", fixtures), ("in libraries", libs)):
-            spent_in = [(name, sec) for name, sec in spent_in if sec >= 0.01]
+            spent_in = [(name, sec) for name, sec in spent_in if sec >= max(0.01, total * 0.02)]
             if spent_in:
                 line = Text(f"    {title}: ", style="dim")
                 line.append(", ".join(f"{name} {render.fmt_dur(sec)}" for name, sec in spent_in), style="dim")
                 self._print(line)
+
+    def _mine(self, path: str) -> bool:
+        root = str(self.config.rootpath) + os.sep
+        return path.startswith(root) and "site-packages" not in path.split(os.sep)
+
+    def _print_tips(self) -> None:
+        """What the timings say to do: fixtures worth a wider scope, libraries slow on purpose, sleeps."""
+        if not self._duration or self._verbose < 0:
+            return
+        samples = sum(self._profiled.values())
+        per_sample = self._call_time / samples if samples else 0
+        by_lib = Counter(self._fixture_spent)
+        by_lib.update({name: n * per_sample for name, n in self._profiled_libs.items()})
+        found = advice.tips(
+            advice.fixture_scopes(self._fixtures, self._my_fixtures, self._duration),
+            advice.slow_libraries(by_lib, self._duration),
+            advice.sleeps(self._slept, self._duration),
+        )
+        if not found:
+            return
+        self.console.print()
+        for tip in found:
+            self._print(Text.assemble("  💡 ", (tip.what, "bold")))
+            self.console.print(Padding(Text(tip.do, style="dim"), (0, 0, 0, 5)))  # wraps: it's the point
 
     def _print_fixtures(self) -> None:
         ranked = sorted(self._fixtures.items(), key=lambda item: -item[1].total)[:5]

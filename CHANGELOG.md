@@ -9,6 +9,9 @@ All notable changes to this project are documented here. The format follows
 - `--glow-profile`: where a test's time goes, the test itself, your code, libraries or fixtures, by sampling
   its stack; per slow test and for the whole run, with the libraries that take the most.
 - Assertion diffs under xdist too, and for `in`: the near misses when it isn't there, where it is for `not in`.
+- Tips, when something takes a good part of the run: a fixture worth a wider scope, and with `--glow-profile`
+  libraries slow on purpose (argon2, bcrypt…) and tests that sleep; with what to do about it.
+- `--glow-profile` keeps its numbers out of junitxml, and counts conftest fixtures as your code.
 - Fixed: the green streak stopped at 31.
 - Fixed: "faster than last run" compared with an older run of as many tests while saying "last run".
 

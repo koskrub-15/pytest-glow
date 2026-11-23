@@ -1006,6 +1006,34 @@ def test_no_profile_unless_asked(pytester):
     assert "in tests went" not in out and "↳ test" not in out
 
 
+_FIXTURE_SUITE = (
+    "import time, pytest\n"
+    "@pytest.fixture\ndef client():\n    time.sleep(0.06)\n"
+    "@pytest.mark.parametrize('i', range(10))\ndef test_api(client, i): pass\n"
+)
+
+
+def test_tip_for_a_fixture_set_up_over_and_over(pytester):
+    pytester.makepyfile(test_t=_FIXTURE_SUITE)
+    _, out = run(pytester, "--glow")
+    assert re.search(r"💡 client is set up 10× at \d+ms each", out), out
+    assert 'scope="module"' in out
+
+
+def test_tip_for_sleeping_tests(pytester):
+    pytester.makepyfile(test_t="import time\ndef test_retry():\n    time.sleep(0.6)\n")
+    _, out = run(pytester, "--glow", "--glow-profile")
+    assert re.search(r"💡 tests sleep for 6\d\dms, \d+% of the run \(test_retry", out), out
+    _, out = run(pytester, "--glow")
+    assert "💡" not in out  # sleeps are timed only when profiling
+
+
+def test_profile_stays_out_of_junitxml(pytester):
+    _profiled_project(pytester)
+    run(pytester, "--glow", "--glow-profile", "--junitxml=out.xml")
+    assert "glow_profile" not in (pytester.path / "out.xml").read_text()
+
+
 def test_pace_compares_with_a_run_of_as_many_tests(pytester):
     pytester.makepyfile(test_p="import pytest\n@pytest.mark.parametrize('i', range(3))\ndef test_p(i): pass\n")
     run(pytester, "--glow")

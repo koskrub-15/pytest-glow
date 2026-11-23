@@ -33,6 +33,9 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
   libraries that take the most (`in fixtures: argon2 5.40s`). It samples the stack every 5 ms, so it costs
   about nothing; time in C code (a `sleep`, a socket, numpy) counts for the Python code that called it.
   On macOS it gets a look in only every ~45 ms, so a test needs half a second or so for a breakdown of its own
+- tips, when something takes a good part of the run: `💡 auth_client is set up 54× at 108ms each: 5.85s, 49% of
+  the run`, with what to do about it (`scope="module"`). With `--glow-profile`, also libraries slow on purpose
+  (`💡 argon2 takes 7.46s, 63% of the run`: cheaper hashing in tests) and tests that sleep
 - paths you can click: tests, files and failures open in the editor (VS Code's terminal opens at the line)
 - a verdict panel with the counts and a proportional bar
 - the command to rerun just the failures (`pytest --lf` when there are many)
