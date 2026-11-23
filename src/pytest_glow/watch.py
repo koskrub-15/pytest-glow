@@ -15,6 +15,7 @@ from rich.console import Console
 from rich.text import Text
 
 from . import render
+from .affected import supported
 
 POLL = 0.4  # seconds between looks at the files
 SETTLE = 0.15  # editors save in bursts: wait this long for the rest
@@ -42,15 +43,22 @@ def changes(before: Snapshot, after: Snapshot) -> list[str]:
 
 
 def child_args(
-    args: tuple[str, ...] | list[str], *, failed: bool = False, pattern: str | None = None, debug: bool = False
+    args: tuple[str, ...] | list[str],
+    *,
+    failed: bool = False,
+    pattern: str | None = None,
+    debug: bool = False,
+    affected: bool = False,
 ) -> list[str]:
     """The same pytest command, without the watch and with the likely failures first.
 
     ``failed``: only what failed last time; ``pattern``: only tests matching ``-k``; ``debug``: into pdb at the
-    first failure of what failed last time.
+    first failure of what failed last time; ``affected``: only the tests what changed can affect.
     """
-    kept = [a for a in args if a != "--glow-watch"]
+    kept = [a for a in args if a not in ("--glow-watch", "--glow-affected")]
     out = [sys.executable, "-m", "pytest", *kept, "--glow-ff"]
+    if affected:
+        out.append("--glow-affected")
     if failed or debug:
         out.append("--lf")
     if pattern:
@@ -158,16 +166,15 @@ def wait(root: str, before: Snapshot, key: Callable[[float], str | None]) -> tup
             return "changed", changes(before, after), after
 
 
-def _footer(snapshot: Snapshot, failed: bool, pattern: str | None) -> Text:
-    tail = Text(f"\n👀 watching {len(snapshot)} files · save to rerun", style="dim")
-    for key, what in (
-        ("enter", "all"),
-        ("f", "all tests" if failed else "only failed"),
-        ("p", "pattern"),
-        ("d", "debug"),
-        ("q", "quit"),
-    ):
-        tail.append(" · ", style="dim")
+def _footer(snapshot: Snapshot, failed: bool, pattern: str | None, affected: bool = False) -> Text:
+    tail = Text(f"\n👀 watching {len(snapshot)} files · save to rerun\n  ", style="dim")
+    keys = [("enter", "all"), ("f", "all tests" if failed else "only failed")]
+    if supported():
+        keys.append(("c", "every test" if affected else "only affected"))
+    keys += [("p", "pattern"), ("d", "debug"), ("q", "quit")]
+    for i, (key, what) in enumerate(keys):
+        if i:
+            tail.append(" · ", style="dim")
         tail.append(key, style="bold")
         tail.append(f" {what}", style="dim")
     return tail
@@ -179,6 +186,7 @@ def main(args: tuple[str, ...], cwd: str, root: str) -> int:
     snapshot = scan(root)
     code, run, changed = 0, 0, []
     failed, pattern, debug = False, None, False
+    affected, full = "--glow-affected" in args and supported(), False  # full: once everything, affected or not
     with Keys() as keys:
         while True:
             run += 1
@@ -186,6 +194,8 @@ def main(args: tuple[str, ...], cwd: str, root: str) -> int:
                 console.clear()
             head = Text.assemble(("👀 ", ""), render.gradient_text("glow watch", render.GRADIENTS["glow"]))
             head.append(f" · run {run}", style="dim")
+            if affected and not full:
+                head.append(" · only affected", style="bold #22d3ee")
             if debug:
                 head.append(" · debugging what failed", style="bold yellow")
             elif failed:
@@ -199,7 +209,7 @@ def main(args: tuple[str, ...], cwd: str, root: str) -> int:
                 head.append(", ".join(shown) + (f" +{len(changed) - 3}" if len(changed) > 3 else ""), style="bold")
             console.print(head)
             env = dict(os.environ, PYTEST_GLOW_CHANGED=os.pathsep.join(changed))
-            command = child_args(args, failed=failed, pattern=pattern, debug=debug)
+            command = child_args(args, failed=failed, pattern=pattern, debug=debug, affected=affected and not full)
             keys.__exit__()  # the tests get the terminal as it was: pdb, input(), ^C
             try:
                 code = subprocess.call(command, cwd=cwd, env=env)
@@ -207,8 +217,8 @@ def main(args: tuple[str, ...], cwd: str, root: str) -> int:
                 return code
             finally:
                 keys.__enter__()
-            debug = False
-            console.print(_footer(snapshot, failed, pattern))
+            debug = full = False
+            console.print(_footer(snapshot, failed, pattern, affected))
             while True:
                 try:
                     what, changed, snapshot = wait(root, snapshot, keys.key)
@@ -222,8 +232,10 @@ def main(args: tuple[str, ...], cwd: str, root: str) -> int:
                     failed, pattern = False, keys.line("pattern (-k), empty for all › ") or None
                 elif what == "d":
                     debug = True
+                elif what == "c" and supported():  # stays on: every save runs only what it affects
+                    affected = not affected
                 elif what in ("\n", "\r", "a"):
-                    failed, pattern = False, None
+                    failed, pattern, full = False, None, True
                 elif what != "changed":
                     continue  # a key that means nothing
                 break

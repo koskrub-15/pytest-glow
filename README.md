@@ -42,10 +42,18 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 
 **While you work**
 - `pytest --glow-watch`: reruns on every save, what failed last time and what you just changed first. The header
-  says which files changed. Keys, no Enter needed: `f` only what failed, `p` only tests matching a `-k`
-  pattern, `d` the failures again in pdb, enter everything, `q` quits
+  says which files changed. Keys, no Enter needed: `f` only what failed, `c` only what a save affects
+  (`--glow-affected` on every rerun, until `c` again; Python 3.12+), `p` only tests matching a `-k` pattern,
+  `d` the failures again in pdb, enter everything once, `q` quits
 - `--glow-ff`: runs first what likely fails: what failed last time, the test files you're editing (or the ones
   named after a module you're editing: `test_cart.py` for `shop/cart.py`), new tests and flaky ones
+- `--glow-affected`: runs only the tests what you changed can affect. While tests run with it, glow notes which
+  of the project's files each one runs code from (wider-scoped fixtures included); the next run picks the tests
+  whose files changed since, new tests and what failed. `◎ affected: 22 of 138 tests · 22 changed
+  (apps/services/month.py)`; nothing changed, nothing runs, and that's a pass. When no test runs code from a
+  changed file (a module of constants), it can't tell who uses it and runs everything; a changed `conftest.py`
+  runs the tests under it. Python files only: a changed JSON fixture isn't noticed. Python 3.12+ (it uses
+  `sys.monitoring`, about 1% slower); works under xdist and with `--no-glow`
 - `--glow-rerun[=N]`: a failed test runs again, up to N times. One that then passes is called out as flaky with
   how it failed the first time, and the run is GREEN, BUT FLAKY rather than red. Works under xdist and in CI
 
@@ -126,7 +134,8 @@ Just run `pytest`. Everything else is optional:
 | `--glow-sound` or `PYTEST_GLOW_SOUND=1` | 8-bit sounds for combos, the boss and the end of the run (terminal only); `glow_sound = true` in the ini |
 | `--glow-share[=PATH]` | save the run as an SVG card, `glow-card.svg` by default |
 | `--glow-profile` or `PYTEST_GLOW_PROFILE=1` | split test time into the test, your code, libraries and fixtures; `glow_profile = true` in the ini |
-| `--glow-watch` | rerun on every save, failures and changed tests first; `f`, `p`, `d`, enter and `q` while it waits |
+| `--glow-watch` | rerun on every save, failures and changed tests first; `f`, `c`, `p`, `d`, enter and `q` while it waits |
+| `--glow-affected` or `PYTEST_GLOW_AFFECTED=1` | run only the tests that what changed can affect (Python 3.12+) |
 | `--glow-ff` or `PYTEST_GLOW_FF=1` | run the likely failures first; `glow_ff = true` in the ini |
 | `--glow-rerun[=N]` or `PYTEST_GLOW_RERUN=N` | rerun a failed test up to N times (1 by default) and call out flaky ones; `glow_rerun = N` in the ini |
 | `PYTEST_GLOW_SUMMARY=0` | no job summary on GitHub Actions; `glow_summary = false` in the ini |

@@ -79,6 +79,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "(also PYTEST_GLOW_PROFILE=1 or glow_profile = true in the ini)",
     )
     group.addoption(
+        "--glow-affected",
+        action="store_true",
+        default=None,
+        help="run only the tests what you changed can affect, learnt from the runs before (Python 3.12+; "
+        "also PYTEST_GLOW_AFFECTED=1)",
+    )
+    group.addoption(
         "--glow-watch",
         action="store_true",
         default=False,
@@ -191,6 +198,7 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
 
 ORDERED = pytest.StashKey["Counter[str]"]()
 RERUNS = pytest.StashKey[int]()
+AFFECTED = pytest.StashKey[dict]()  # --glow-affected: {"stored", "files"}, then "choice" or "unsupported"
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -205,12 +213,60 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> 
 
 @pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config, items: list[pytest.Item]) -> None:
+    affected = config.stash.get(AFFECTED, None)
+    if affected is not None and "stored" in affected and items:
+        from . import affected as aff
+        from .history import FAILING, History
+
+        history = History(getattr(config, "cache", None))
+        failing = {item.nodeid for item in items if history.last_outcome(item.nodeid) in FAILING}
+        choice = aff.choose(items, affected["stored"], affected["files"], failing, lambda item: item.nodeid)
+        affected["choice"] = choice
+        if choice.deselected:
+            items[:] = choice.selected
+            config.hook.pytest_deselected(items=choice.deselected)
     if not flag(config, "ff") or not items:
         return
     from . import order
     from .history import History
 
     config.stash[ORDERED] = order.reorder(items, History(getattr(config, "cache", None)), str(config.rootpath))
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """--glow-affected: nothing to run because nothing changed is a success, not "no tests collected"."""
+    affected = session.config.stash.get(AFFECTED, {})
+    if exitstatus != pytest.ExitCode.NO_TESTS_COLLECTED or not affected.get("stored", {}).get("tests"):
+        return
+    choice = affected.get("choice")
+    if choice is not None:  # collected here: it knows
+        nothing = not choice.selected and bool(choice.deselected)
+    else:  # an xdist controller: the workers collected, and picked, and found nothing
+        nothing = getattr(session.config.option, "dist", "no") != "no"
+    if nothing:
+        session.exitstatus = pytest.ExitCode.OK
+
+
+def _start_affected(config: pytest.Config) -> None:
+    from . import affected as aff
+
+    cache = getattr(config, "cache", None)
+    if not aff.supported() or cache is None:
+        config.stash[AFFECTED] = {"unsupported": "needs Python 3.12+" if cache is not None else "needs the cache"}
+        return
+    stored = cache.get(aff.KEY, {})
+    if not isinstance(stored, dict):
+        stored = {}
+    files = aff.snapshot(str(config.rootpath), stored.get("files", {}))
+    config.stash[AFFECTED] = {"stored": stored, "files": files}
+    worker = hasattr(config, "workerinput")
+    controller = not worker and getattr(config.option, "dist", "no") != "no"
+    if not controller:  # under xdist the workers run the tests
+        tracker = aff.Tracker(str(config.rootpath))
+        if tracker.start():
+            config.pluginmanager.register(tracker, "glow-affected-tracker")
+    if not worker:
+        config.pluginmanager.register(aff.Keeper(cache, files, stored), "glow-affected")
 
 
 @pytest.hookimpl(trylast=True)
@@ -221,6 +277,8 @@ def pytest_configure(config: pytest.Config) -> None:
     from . import rerun, summary
 
     config.stash[RERUNS] = rerun.reruns(config)
+    if flag(config, "affected"):
+        _start_affected(config)
     if getattr(config, "workerinput", {}).get("glow"):  # an xdist worker of a glowing run
         from .diff import Recorder
 

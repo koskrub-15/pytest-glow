@@ -481,6 +481,8 @@ def test_watch_runs_the_same_command(monkeypatch):
     ]
     assert watch.child_args(["x"], failed=True, pattern="cart")[-4:] == ["--glow-ff", "--lf", "-k", "cart"]
     assert watch.child_args(["x"], debug=True)[-4:] == ["--glow-ff", "--lf", "--pdb", "-x"]
+    assert watch.child_args(["x"], affected=True)[-2:] == ["--glow-ff", "--glow-affected"]
+    assert "--glow-affected" not in watch.child_args(["--glow-affected", "x"])  # the watch decides, run by run
 
 
 def test_watch_keys_from_a_pipe():
