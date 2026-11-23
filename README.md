@@ -20,7 +20,10 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 - rich tracebacks: highlighted source, locals (without pytest's `@py_assert` noise), captured output
 - diffs for failed `==` asserts on dicts, lists, sets, strings, numbers, dataclasses and namedtuples: only what
   changed, nested paths like `user.address.city`, changed characters lit up. The failure one-liners say it
-  too: `role: 'user' → 'admin'` instead of `assert {'name': 'gra...active': True} == {...}`
+  too: `role: 'user' → 'admin'` instead of `assert {'name': 'gra...active': True} == {...}`. Also under xdist
+- for a failed `in`, the near misses: `'3 new messages'` not in the page, but `'3 new mesages'` at char 50;
+  `'admin'` not in the roles, closest `[3] 'admins'`; `8080` not in the ports, closest `8081`. For `not in`,
+  where it was found, lit up in its context
 - failures that failed the same way (same place, same message) grouped under one traceback: a database
   that's down is one failure with "+39 more like this", not forty tracebacks
 - warnings grouped by message, the slowest tests, a short list of what failed
@@ -30,6 +33,9 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
   libraries that take the most (`in fixtures: argon2 5.40s`). It samples the stack every 5 ms, so it costs
   about nothing; time in C code (a `sleep`, a socket, numpy) counts for the Python code that called it.
   On macOS it gets a look in only every ~45 ms, so a test needs half a second or so for a breakdown of its own
+- tips, when something takes a good part of the run: `💡 auth_client is set up 54× at 108ms each: 5.85s, 49% of
+  the run`, with what to do about it (`scope="module"`). With `--glow-profile`, also libraries slow on purpose
+  (`💡 argon2 takes 7.46s, 63% of the run`: cheaper hashing in tests) and tests that sleep
 - paths you can click: tests, files and failures open in the editor (VS Code's terminal opens at the line)
 - a verdict panel with the counts and a proportional bar
 - the command to rerun just the failures (`pytest --lf` when there are many)
@@ -59,6 +65,8 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
 
 **Pure showing off** (all of it remembered in `.pytest_cache` too)
 - personal bests: the fastest green run for a given number of tests, `🏆 new PB` when you beat it
+- the ghost of your personal best races the run: under the progress bar, a 👻 where the best run was by now,
+  and `▲ 0.5s ahead` or `▼ 1.2s behind` (for suites that take 3 seconds or more)
 - achievements, each unlocked once per project: First Blood, Phoenix, Night Owl, Minimalist, Sniper,
   Speedrunner, Surgeon, Clean Sweep, Centurion, Friday Deploy, Archaeologist, Glass Cannon, Unstoppable,
   Boss Slayer, Shiny Hunter
@@ -150,8 +158,8 @@ your tests get measured too.
 - Linux and macOS. On Windows glow only runs with an explicit `--glow` (it's untested there).
 - Works with pytest-xdist, pytest-cov, `breakpoint()`/`--pdb`, `-x`, `-s`, `--durations`, and plugins that
   add their own terminal summary.
-- Under xdist, tracebacks show pytest's highlighted text rather than rich tracebacks and assertion diffs, since
-  the exceptions stay in the worker processes.
+- Under xdist, tracebacks show pytest's highlighted text rather than rich tracebacks, since the exceptions stay
+  in the worker processes (assertion diffs come along).
 - Not supported yet: `-r` short-summary flags (`-rA`, `-rP`, ...) beyond the failure list.
 
 ## Try the demo

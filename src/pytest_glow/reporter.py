@@ -20,12 +20,13 @@ import pytest
 from _pytest.terminal import TerminalReporter
 from rich.console import Console, Group
 from rich.live import Live
+from rich.padding import Padding
 from rich.panel import Panel
 from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, hang, progress, quests, render, rerun, share, sound
+from . import __version__, advice, hang, progress, quests, render, rerun, share, sound
 from . import achievements as ach
 from . import coverage as cov
 from . import diff as assert_diff
@@ -57,6 +58,7 @@ MAX_RERUN_IDS = 3  # beyond this, the rerun hint is `pytest --lf`
 SHINY_ODDS = 1 / 500  # the chance that a green run comes out shiny
 MIN_SAMPLES = 10  # fewer samples of a test than this, and its shares are noise
 PROFILE_STYLES = {"fixtures": "#6b7280", "test": "#22d3ee", "code": "#e879f9", "lib": "#facc15"}
+GHOST_MIN = 3.0  # seconds a personal best has to take for its ghost to race this run
 SLOWER = 2.0  # a test this many times its usual duration (and 100ms more) is called out
 
 
@@ -169,11 +171,13 @@ class GlowReporter(TerminalReporter):
         self._link = link_template() if self._live_enabled else None
         self._locations: dict[str, tuple] = {}  # nodeid -> (path from the rootdir, 0-based line)
         self._fixtures: dict[tuple[str, str], FixtureTime] = {}  # (name, scope) -> time spent in it
+        self._my_fixtures: set[str] = set()  # the ones defined in the project, rather than in pytest or a plugin
         self._profiled = Counter()  # --glow-profile: samples over the whole run, by kind and by library
         self._profiled_libs = Counter()
         self._call_time = 0.0  # in the test bodies, sampled or too short to be
         self._fixture_time = 0.0
         self._fixture_spent: Counter = Counter()  # in setup and teardown: seconds by library, "your code"…
+        self._slept: Counter = Counter()  # nodeid -> seconds in time.sleep
         self._live: Live | None = None
         self._lock = threading.RLock()
         self._capture_off = config.getoption("capture", "fd") == "no"
@@ -189,7 +193,7 @@ class GlowReporter(TerminalReporter):
         self._failures: list[Failure] = []
         self._flaky: list[tuple[str, int, str]] = []  # (nodeid, attempts it took, how it failed first)
         self._tracebacks: dict[tuple[str, str], Any] = {}
-        self._compare: tuple[Any, Any] | None = None  # operands of the last failed `==` assertion
+        self._compare: tuple[str, Any, Any] | None = None  # (op, left, right) of the last comparison explained
         self._diffs: dict[tuple[str, str], assert_diff.Diff] = {}
         self._collect_errors: list[Any] = []
         self._workers: set[str] = set()
@@ -197,6 +201,7 @@ class GlowReporter(TerminalReporter):
         self._total = 0
         self._done = 0
         self._planned = False
+        self._ghost: float | None = None  # the personal best for as many tests, when it races this run
         self._announced = False
         self._t_start = time.monotonic()
         self._t_run: float | None = None
@@ -416,6 +421,8 @@ class GlowReporter(TerminalReporter):
             for path, n in per_file.items():
                 self._files[path] = FileState(path, n)
             self._total = len(nodeids)
+            best = self._history.personal_best(self._total) if self._history.enabled else None
+            self._ghost = best if best is not None and best >= GHOST_MIN else None
             self._path_width = min(max((len(p) for p in per_file), default=10), 48)
 
     def _announce_plan(self) -> None:
@@ -471,13 +478,9 @@ class GlowReporter(TerminalReporter):
         if not report.failed or call.excinfo is None:
             return report
         key = (report.nodeid, report.when)
-        error = call.excinfo.value
-        # a `==` caught earlier in the test (pytest.raises) mustn't be blamed for a later, different assert
-        if compare is not None and isinstance(error, AssertionError) and " == " in str(error).split("\n", 1)[0]:
-            # diffed now, while the operands are as the assertion saw them
-            found = assert_diff.explain(*compare)
-            if found is not None:
-                self._diffs[key] = found
+        found = assert_diff.for_error(compare, call.excinfo.value)  # now, while the operands are as the assert saw them
+        if found is not None:
+            self._diffs[key] = found
         if self._tbstyle in ("auto", "long"):
             with contextlib.suppress(Exception):
                 self._tracebacks[key] = render.rich_traceback(
@@ -487,7 +490,12 @@ class GlowReporter(TerminalReporter):
 
     @pytest.hookimpl(wrapper=True)
     def pytest_fixture_setup(self, fixturedef: Any, request: pytest.FixtureRequest):
-        spent = self._fixtures.setdefault((fixturedef.argname, fixturedef.scope), FixtureTime())
+        key = (fixturedef.argname, fixturedef.scope)
+        spent = self._fixtures.get(key)
+        if spent is None:
+            spent = self._fixtures[key] = FixtureTime()
+            if self._mine(getattr(getattr(fixturedef.func, "__code__", None), "co_filename", "")):
+                self._my_fixtures.add(fixturedef.argname)
         started: list[float] = []
 
         def tearing_down() -> None:
@@ -508,9 +516,13 @@ class GlowReporter(TerminalReporter):
             fixturedef.addfinalizer(tearing_down)
 
     def pytest_assertrepr_compare(self, config: pytest.Config, op: str, left: Any, right: Any) -> None:
-        # Only remembered: pytest still writes its own explanation, for --tb=short, xdist and the like.
-        if op == "==":
-            self._compare = (left, right)
+        # Only remembered: pytest still writes its own explanation, for --tb=short and the like.
+        if op in assert_diff.OPS:
+            self._compare = (op, left, right)
+
+    @pytest.hookimpl(optionalhook=True)
+    def pytest_configure_node(self, node: Any) -> None:
+        node.workerinput["glow"] = True  # so the worker diffs failed asserts for us: see diff.Recorder
 
     def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
         self._tests_ran = True
@@ -519,6 +531,9 @@ class GlowReporter(TerminalReporter):
         with self._lock:
             ts = self._tests.setdefault(report.nodeid, TestState())
             ts.duration += report.duration
+            slept = (prof.profile(report) or {}).get("sleep")
+            if slept:
+                self._slept[report.nodeid] += slept
             if report.when == "call":
                 self._call_time += report.duration
                 sampled = prof.profile(report)
@@ -533,14 +548,17 @@ class GlowReporter(TerminalReporter):
                 if sampled is not None:
                     samples = sum(sampled.get(k, 0) for k in prof.KINDS)
                     per_sample = report.duration / samples if samples else 0
-                    self._fixture_spent["your code"] += sampled.get("code", 0) * per_sample
+                    # a fixture's own code, in a conftest or a test file, is your code too
+                    mine = sampled.get("code", 0) + sampled.get("test", 0)
+                    self._fixture_spent["your code"] += mine * per_sample
                     for name, n in sampled.get("libs", {}).items():
                         self._fixture_spent[name] += n * per_sample
             if category and ts.outcome not in render.FAILING:
                 ts.outcome = category
             if report.failed:
                 key = (report.nodeid, report.when)
-                self._failures.append(Failure(report, self._tracebacks.pop(key, None), self._diffs.pop(key, None)))
+                found = self._diffs.pop(key, None) or assert_diff.from_report(report)
+                self._failures.append(Failure(report, self._tracebacks.pop(key, None), found))
             flaky = rerun.flaky(report) if report.when == "call" and report.passed else None
             if flaky is not None:
                 self._flaky.append((report.nodeid, *flaky))
@@ -731,6 +749,9 @@ class GlowReporter(TerminalReporter):
                 Text("⏱ " + render.fmt_clock(elapsed), style="dim"),
                 Text("eta " + (render.fmt_clock(eta) if eta is not None else "…"), style="dim"),
             )
+            ghost = self._ghost_row(now, total)
+            if ghost is not None:
+                overall.add_row(*ghost)
             if self._fight is not None:
                 self._fight.hp = total
                 parts += [Text(""), arena(self._fight, total - self._hits(), failing, now, self._last_hit, self._combo)]
@@ -741,6 +762,26 @@ class GlowReporter(TerminalReporter):
             if self._status and self._verbose > 0:
                 parts.append(Text(self._status, style="dim"))
             return Group(*parts)
+
+    def _ghost_row(self, now: float, total: float) -> list | None:
+        """The personal best, racing this run: where it was by now, and how far ahead of it, or behind, this run is."""
+        best = self._ghost
+        since = now - self._t_start  # the best is timed from the session's start too
+        if best is None or since < 1.0 or self._total != total:
+            return None
+        lead = best * self._done / total - since  # when the best got as far as this run is now, less now
+        if lead >= 0:
+            race = Text(f"▲ {render.fmt_clock(lead)} ahead", style="bold green")
+        else:
+            race = Text(f"▼ {render.fmt_clock(-lead)} behind", style="red")
+        return [
+            "",
+            render.GhostBar(since / best * total, total),
+            Text("PB", style="dim"),
+            "",
+            Text("⏱ " + render.fmt_clock(best), style="dim"),
+            race,
+        ]
 
     # -- debugging --------------------------------------------------------------------
 
@@ -801,7 +842,10 @@ class GlowReporter(TerminalReporter):
                 self._print(Text(f"Tests pass, but maximum allowed warnings exceeded: {n} > {max_warnings}", "red"))
         self._duration = time.monotonic() - self._t_start
         self._shiny = bool(
-            self._done and not self._failing() and exitstatus == pytest.ExitCode.OK and random.random() < SHINY_ODDS
+            self._done
+            and not self._failing()
+            and exitstatus == pytest.ExitCode.OK
+            and random.random() < float(os.environ.get("PYTEST_GLOW_SHINY_ODDS", SHINY_ODDS))
         )
         if self._boss_won() and exitstatus == pytest.ExitCode.OK:
             self._loot = drop()
@@ -810,6 +854,7 @@ class GlowReporter(TerminalReporter):
             self._print_slowest()
             self._print_fixtures()
             self._print_profile()
+            self._print_tips()
             self._print_insights()
             self._print_achievements()
             self._print_changes()
@@ -864,7 +909,11 @@ class GlowReporter(TerminalReporter):
             else:
                 self.console.print(Panel(render.longrepr_text(str(report.longreprtext)), border_style="red"))
             if failure.diff is not None and self._tbstyle in ("auto", "long"):
-                title = Text.assemble(" ", ("− left", assert_diff.LEFT), "  ", ("+ right", assert_diff.RIGHT), " ")
+                title = (
+                    Text(f" {failure.diff.title} ", style="bold")
+                    if failure.diff.title
+                    else Text.assemble(" ", ("− left", assert_diff.LEFT), "  ", ("+ right", assert_diff.RIGHT), " ")
+                )
                 self.console.print(render.GlowPanel(failure.diff.render(), render.GRADIENTS["glow"], title))
             if same:
                 self._print_same(same)
@@ -1087,7 +1136,8 @@ class GlowReporter(TerminalReporter):
         self.console.print(Text("  slowest", style="bold dim"))
         table = Table.grid(padding=(0, 2))
         # the widths: a long --glow-profile breakdown would squeeze the times and bars otherwise
-        table.add_column(justify="right", no_wrap=True, min_width=2 + max(len(render.fmt_dur(d)) for d, _ in slowest))
+        time_width = 2 + max(len(render.fmt_dur(d)) for d, _ in slowest)
+        table.add_column(justify="right", no_wrap=True, min_width=time_width)
         table.add_column(no_wrap=True, min_width=12)
         table.add_column(no_wrap=True, overflow="ellipsis")
         table.add_column(no_wrap=True)
@@ -1113,31 +1163,43 @@ class GlowReporter(TerminalReporter):
                 trend(nodeid, dur),
                 compare,
             )
-            breakdown = self._breakdown(self._tests[nodeid])
+            breakdown = self._breakdown(self._tests[nodeid], self.console.width - time_width - 2 - 12 - 2)
             if breakdown:
                 table.add_row("", "", breakdown)
         self.console.print(table)
 
-    def _breakdown(self, ts: TestState) -> Text:
-        """--glow-profile: the test's time as shares of the test itself, your code, libraries and fixtures."""
+    def _breakdown(self, ts: TestState, width: int) -> Text:
+        """--glow-profile: the test's time as shares of the test itself, your code, libraries and fixtures; on as
+        many lines of ``width`` as it takes, broken between the shares (rich would break a word)."""
         sampled = ts.profile
         if sampled is None or sum(sampled.get(k, 0) for k in prof.KINDS) < MIN_SAMPLES or not ts.duration:
             return Text()
         spent = prof.split(ts.duration - ts.fixtures, sampled)
         spent["fixtures"] = ts.fixtures
         top_lib = next(iter(sampled.get("libs", {})), None)
-        text = Text("↳ ", style="dim", no_wrap=False, overflow="fold")  # wraps rather than cut a share off
+        pieces = []
         for kind, label in (("test", "test"), ("code", "your code"), ("lib", "libs"), ("fixtures", "fixtures")):
             share = spent.get(kind, 0) / ts.duration
             if share < 0.01:
                 continue
-            if len(text) > 2:
-                text.append(" · ", style="dim")
-            text.append(f"{label} ", style="dim")
-            text.append(f"{share:.0%}", style=PROFILE_STYLES[kind])
+            piece = Text.assemble((f"{label} ", "dim"), (f"{share:.0%}", PROFILE_STYLES[kind]))
             if kind == "lib" and top_lib:
-                text.append(f" ({top_lib})", style="dim")
-        return text if len(text) > 2 else Text()
+                piece.append(f" ({top_lib})", style="dim")
+            pieces.append(piece)
+        if not pieces:
+            return Text()
+        text = Text("↳ ", style="dim")
+        line = 2
+        for i, piece in enumerate(pieces):
+            if i and line + 3 + len(piece) > width:
+                text.append(" ·\n  ", style="dim")
+                line = 2
+            elif i:
+                text.append(" · ", style="dim")
+                line += 3
+            text.append_text(piece)
+            line += len(piece)
+        return text
 
     def _print_profile(self) -> None:
         """--glow-profile: where the time in tests went, over the whole run."""
@@ -1172,11 +1234,35 @@ class GlowReporter(TerminalReporter):
         libs = [(name, n * per_sample) for name, n in self._profiled_libs.most_common(5)]
         fixtures = self._fixture_spent.most_common(5)
         for title, spent_in in (("in fixtures", fixtures), ("in libraries", libs)):
-            spent_in = [(name, sec) for name, sec in spent_in if sec >= 0.01]
+            spent_in = [(name, sec) for name, sec in spent_in if sec >= max(0.01, total * 0.02)]
             if spent_in:
                 line = Text(f"    {title}: ", style="dim")
                 line.append(", ".join(f"{name} {render.fmt_dur(sec)}" for name, sec in spent_in), style="dim")
                 self._print(line)
+
+    def _mine(self, path: str) -> bool:
+        root = str(self.config.rootpath) + os.sep
+        return path.startswith(root) and "site-packages" not in path.split(os.sep)
+
+    def _print_tips(self) -> None:
+        """What the timings say to do: fixtures worth a wider scope, libraries slow on purpose, sleeps."""
+        if not self._duration or self._verbose < 0:
+            return
+        samples = sum(self._profiled.values())
+        per_sample = self._call_time / samples if samples else 0
+        by_lib = Counter(self._fixture_spent)
+        by_lib.update({name: n * per_sample for name, n in self._profiled_libs.items()})
+        found = advice.tips(
+            advice.fixture_scopes(self._fixtures, self._my_fixtures, self._duration),
+            advice.slow_libraries(by_lib, self._duration),
+            advice.sleeps(self._slept, self._duration),
+        )
+        if not found:
+            return
+        self.console.print()
+        for tip in found:
+            self._print(Text.assemble("  💡 ", (tip.what, "bold")))
+            self.console.print(Padding(Text(tip.do, style="dim"), (0, 0, 0, 5)))  # wraps: it's the point
 
     def _print_fixtures(self) -> None:
         ranked = sorted(self._fixtures.items(), key=lambda item: -item[1].total)[:5]

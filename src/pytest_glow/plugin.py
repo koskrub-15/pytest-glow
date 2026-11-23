@@ -221,6 +221,10 @@ def pytest_configure(config: pytest.Config) -> None:
     from . import rerun, summary
 
     config.stash[RERUNS] = rerun.reruns(config)
+    if getattr(config, "workerinput", {}).get("glow"):  # an xdist worker of a glowing run
+        from .diff import Recorder
+
+        config.pluginmanager.register(Recorder(), "glow-diff")
     if flag(config, "profile"):
         from .profile import Profiler
 

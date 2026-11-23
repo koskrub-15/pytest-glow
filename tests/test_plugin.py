@@ -334,6 +334,35 @@ def test_assertion_diffs(pytester):
     assert "1 ≠ 2" not in out
 
 
+def test_in_diffs(pytester):
+    pytester.makepyfile(
+        test_t="def test_roles():\n    assert 'admin' in ['user', 'admins']\n"
+        "def test_secret():\n    assert 'pw=' not in 'login pw=hunter2'\n"
+    )
+    _, out = run(pytester, "--glow")
+    assert "test_roles  not among the 2 items; closest [1] 'admins'" in out
+    assert "not in there" in out and "found, and shouldn't be" in out
+    assert "test_secret  found at char 6" in out
+
+
+def test_diffs_under_xdist(pytester):
+    pytest.importorskip("xdist")
+    pytester.makepyfile(test_t="def test_payload():\n    assert {'role': 'user'} == {'role': 'admin'}\n")
+    _, out = run(pytester, "--glow", "-n", "2")
+    assert "test_payload  role: 'user' → 'admin'" in out
+    assert "~ 'role': 'user' → 'admin'" in out
+
+
+def test_no_diffs_sent_from_workers_without_glow(pytester):
+    pytest.importorskip("xdist")
+    pytester.makepyfile(test_t="def test_payload():\n    assert {'role': 'user'} == {'role': 'admin'}\n")
+    pytester.makeconftest(
+        "def pytest_runtest_logreport(report):\n    if report.failed: print('ATTR', hasattr(report, 'glow_diff'))\n"
+    )
+    result = pytester.runpytest_subprocess("-n", "1", "-s", "--junitxml=out.xml")
+    assert "ATTR False" in result.stdout.str()
+
+
 def test_short_tracebacks_keep_pytest_text(pytester):
     pytester.makepyfile(test_t="def test_payload():\n    assert {'role': 'user'} == {'role': 'admin'}\n")
     _, out = run(pytester, "--glow", "--tb=short")
@@ -614,7 +643,7 @@ def test_xp_and_level_up(pytester):
     assert "47/150" in out
 
 
-SHINY = "import pytest_glow.reporter\npytest_glow.reporter.SHINY_ODDS = 1.0\n"
+SHINY = "import os\nos.environ['PYTEST_GLOW_SHINY_ODDS'] = '1'\n"
 
 
 def test_shiny_run(pytester):
@@ -947,7 +976,7 @@ def test_glow_profile(pytester):
     _profiled_project(pytester)
     _, out = run(pytester, "--glow", "--glow-profile")
     # a few samples can land in the stdlib (contextlib, around the fixture): "libs 1% (contextlib)" in between
-    found = re.search(r"↳ test (\d+)% · your code (\d+)% ·(?: libs \d+% \(\w+\) ·)?\s+fixtures (\d+)%", out)
+    found = re.search(r"↳ test (\d+)% ·\s+your code (\d+)% ·\s+(?:libs \d+% \(\w+\) ·\s+)?fixtures (\d+)%", out)
     assert found, out
     test, code, fixtures = map(int, found.groups())
     assert re.search(r"\d+ms  ━{12}  test_slow\.py::test_slow", out), out  # the time and bar aren't squeezed
@@ -975,6 +1004,34 @@ def test_no_profile_unless_asked(pytester):
     _profiled_project(pytester)
     _, out = run(pytester, "--glow")
     assert "in tests went" not in out and "↳ test" not in out
+
+
+_FIXTURE_SUITE = (
+    "import time, pytest\n"
+    "@pytest.fixture\ndef client():\n    time.sleep(0.06)\n"
+    "@pytest.mark.parametrize('i', range(10))\ndef test_api(client, i): pass\n"
+)
+
+
+def test_tip_for_a_fixture_set_up_over_and_over(pytester):
+    pytester.makepyfile(test_t=_FIXTURE_SUITE)
+    _, out = run(pytester, "--glow")
+    assert re.search(r"💡 client is set up 10× at \d+ms each", out), out
+    assert 'scope="module"' in out
+
+
+def test_tip_for_sleeping_tests(pytester):
+    pytester.makepyfile(test_t="import time\ndef test_retry():\n    time.sleep(0.6)\n")
+    _, out = run(pytester, "--glow", "--glow-profile")
+    assert re.search(r"💡 tests sleep for 6\d\dms, \d+% of the run \(test_retry", out), out
+    _, out = run(pytester, "--glow")
+    assert "💡" not in out  # sleeps are timed only when profiling
+
+
+def test_profile_stays_out_of_junitxml(pytester):
+    _profiled_project(pytester)
+    run(pytester, "--glow", "--glow-profile", "--junitxml=out.xml")
+    assert "glow_profile" not in (pytester.path / "out.xml").read_text()
 
 
 def test_pace_compares_with_a_run_of_as_many_tests(pytester):

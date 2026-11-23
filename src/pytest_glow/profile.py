@@ -1,8 +1,9 @@
 """--glow-profile: where a test's time goes, the test itself, your code or libraries, from sampling its stack.
 
 A background thread looks at the test's stack every INTERVAL while the test body runs and counts the
-innermost frame that isn't pytest's: in a test file, elsewhere in the project, or in a library. The counts
-ride on the call report as a user property, so they come back from xdist workers too.
+innermost frame that isn't pytest's: in a test file, elsewhere in the project, or in a library. Time in
+time.sleep is counted on its own. The counts ride on the report as an attribute, so they come back from xdist
+workers too, and stay out of junitxml (unlike user properties).
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import os
 import sys
 import sysconfig
 import threading
+import time
 from collections import Counter
 from types import CodeType
 from typing import Any
@@ -21,7 +23,7 @@ import pytest
 from .hang import _internal
 
 INTERVAL = 0.005  # seconds between looks at the stack
-PROFILE = "glow_profile"  # a user property on the call report: {"test": n, "code": n, "lib": n, "libs": {name: n}}
+PROFILE = "glow_profile"  # on each report: {"test": n, "code": n, "lib": n, "libs": {name: n}, "sleep": seconds}
 KINDS = ("test", "code", "lib")
 
 
@@ -41,6 +43,7 @@ class Sampler:
         self._target: int | None = None  # the thread running the test, while one runs
         self._counts: Counter = Counter()
         self._libs: Counter = Counter()
+        self._slept = 0.0
         self._lock = threading.Lock()
         self._stopped = threading.Event()
 
@@ -106,16 +109,23 @@ class Sampler:
     def begin(self) -> None:
         self.start()  # not before a test runs here: an xdist controller never needs the thread
         with self._lock:
-            self._counts, self._libs = Counter(), Counter()
+            self._counts, self._libs, self._slept = Counter(), Counter(), 0.0
             self._target = threading.get_ident()
+
+    def slept(self, seconds: float) -> None:
+        if threading.get_ident() == self._target:
+            self._slept += seconds
 
     def end(self) -> dict | None:
         with self._lock:
             self._target = None
-            counts, libs = self._counts, self._libs
-        if not counts:
+            counts, libs, slept = self._counts, self._libs, self._slept
+        if not counts and not slept:
             return None
-        return {**{k: counts[k] for k in KINDS}, "libs": dict(libs.most_common(5))}
+        result = {**{k: counts[k] for k in KINDS}, "libs": dict(libs.most_common(5))}
+        if slept:
+            result["sleep"] = round(slept, 4)
+        return result
 
 
 class Profiler:
@@ -124,6 +134,22 @@ class Profiler:
     def __init__(self, config: pytest.Config) -> None:
         self.sampler = Sampler(str(config.rootpath), list(config.getini("python_files")))
         self._result: dict | None = None
+        self._sleep = time.sleep
+        sampler, sleep = self.sampler, self._sleep
+
+        def timed_sleep(seconds: float) -> None:
+            t0 = time.perf_counter()
+            try:
+                sleep(seconds)
+            finally:
+                sampler.slept(time.perf_counter() - t0)
+
+        # code that did `from time import sleep` before this keeps the plain one: the sleep time is at least this
+        time.sleep = timed_sleep
+        config.add_cleanup(self._restore)
+
+    def _restore(self) -> None:
+        time.sleep = self._sleep
 
     def pytest_sessionfinish(self) -> None:
         self.sampler.stop()
@@ -152,15 +178,12 @@ class Profiler:
         report = yield
         result, self._result = self._result, None
         if result is not None:
-            report.user_properties = [*report.user_properties, (PROFILE, result)]
+            setattr(report, PROFILE, result)
         return report
 
 
 def profile(report: Any) -> dict | None:
-    for name, value in getattr(report, "user_properties", ()):
-        if name == PROFILE:
-            return value
-    return None
+    return getattr(report, PROFILE, None)
 
 
 def split(seconds: float, counts: dict) -> dict[str, float]:

@@ -7,7 +7,8 @@ import difflib
 from dataclasses import dataclass, field
 from typing import Any
 
-from rich.text import Text
+import pytest
+from rich.text import Span, Text
 
 LEFT = "#f87171"
 RIGHT = "#4ade80"
@@ -23,6 +24,7 @@ MAX_DEPTH = 6
 class Diff:
     lines: list[Text] = field(default_factory=list)
     changes: list[str] = field(default_factory=list)  # one short description per difference
+    title: str = ""  # the panel's title, when it isn't left and right
 
     @property
     def summary(self) -> str:
@@ -30,6 +32,24 @@ class Diff:
             return ""
         more = len(self.changes) - 1
         return self.changes[0] + (f"  (+{more} more)" if more else "")
+
+    def dump(self) -> dict:
+        """As plain data, to travel with a report from an xdist worker."""
+        lines = [
+            [line.plain, [[sp.start, sp.end, str(sp.style)] for sp in line.spans], str(line.style)]
+            for line in self.lines
+        ]
+        return {"lines": lines, "changes": self.changes, "title": self.title}
+
+    @classmethod
+    def load(cls, data: Any) -> Diff | None:
+        try:
+            lines = [
+                Text(plain, style=style, spans=[Span(*sp) for sp in spans]) for plain, spans, style in data["lines"]
+            ]
+            return cls(lines, list(data["changes"]), str(data.get("title", "")))
+        except Exception:
+            return None
 
     def render(self) -> Text:
         lines = self.lines
@@ -78,6 +98,143 @@ def explain(left: Any, right: Any) -> Diff | None:
         return diff if diff.lines else None
     except Exception:
         return None
+
+
+def for_error(compare: tuple | None, error: BaseException) -> Diff | None:
+    """The diff of a test's failed assert: ``compare`` is (op, left, right) of the last comparison pytest explained,
+    which only counts when it's the assert that failed: one caught earlier (pytest.raises) mustn't be blamed."""
+    if compare is None or not isinstance(error, AssertionError):
+        return None
+    op, left, right = compare
+    if f" {op} " not in str(error).split("\n", 1)[0]:
+        return None
+    if op == "==":
+        return explain(left, right)
+    return explain_in(left, right, negated=op == "not in")
+
+
+MAX_WINDOWS = 4000  # substrings of a long text tried as near misses
+
+
+def explain_in(item: Any, container: Any, negated: bool = False) -> Diff | None:
+    """Why `item in container` failed: the near misses when it isn't there, where it is when it shouldn't be."""
+    try:
+        diff = Diff(title="found, and shouldn't be" if negated else "not in there")
+        if isinstance(item, str) and isinstance(container, str):
+            (_found_in_text if negated else _missing_from_text)(item, container, diff)
+        elif isinstance(container, (list, tuple, set, frozenset, dict)):
+            (_found_in_items if negated else _missing_from_items)(item, container, diff)
+        return diff if diff.lines else None
+    except Exception:
+        return None
+
+
+def _closest_window(item: str, text: str) -> tuple[int, str, float] | None:
+    """The substring of ``text`` most like ``item``: (where, substring, likeness)."""
+    size = len(item)
+    if not size or len(text) < 2:
+        return None
+    starts = range(0, max(len(text) - size, 0) + 1, max(1, (len(text) - size) // MAX_WINDOWS + 1))
+    best = None
+    for start in starts:
+        window = text[start : start + size]
+        matcher = difflib.SequenceMatcher(None, item, window, autojunk=False)
+        if matcher.real_quick_ratio() < 0.6 or (best and matcher.quick_ratio() <= best[2]):
+            continue
+        ratio = matcher.ratio()
+        if ratio >= 0.6 and (best is None or ratio > best[2]):
+            blocks = [b for b in matcher.get_matching_blocks() if b.size]
+            first, last = blocks[0].b, blocks[-1].b + blocks[-1].size  # without what's around the match
+            best = (start + first, window[first:last], ratio)
+    return best
+
+
+def _missing_from_text(item: str, text: str, diff: Diff) -> None:
+    near = _closest_window(item, text) if "\n" not in item else None
+    if near is None:
+        return
+    start, window, _ = near
+    a, b = _highlight(repr(item), repr(window))
+    diff.lines.append(Text.assemble(("- ", LEFT), a, ("   looked for", "dim")))
+    diff.lines.append(Text.assemble(("+ ", RIGHT), b, (f"   closest, at char {start}", "dim")))
+    diff.changes.append(f"not in the text; closest {short(window, 30)} at char {start}")
+
+
+def _found_in_text(item: str, text: str, diff: Diff) -> None:
+    start = text.find(item)
+    if start < 0:
+        return
+    count = text.count(item)
+    before, after = text[max(start - 25, 0) : start], text[start + len(item) : start + len(item) + 25]
+    line = Text("  ")
+    line.append(("…" if start > 25 else "") + repr(before)[1:-1], style="dim")
+    line.append(repr(item)[1:-1], style=LEFT_HI)
+    line.append(repr(after)[1:-1] + ("…" if start + len(item) + 25 < len(text) else ""), style="dim")
+    diff.lines.append(line)
+    times = f", {count} times" if count > 1 else ""
+    diff.changes.append(f"found at char {start}{times}")
+
+
+def _candidates(container: Any) -> list[tuple[str, Any]]:
+    """(label, item) of what's in the container: [i] for a sequence, the item itself for a set, dict keys."""
+    if isinstance(container, (list, tuple)):
+        return [(f"[{i}]", x) for i, x in enumerate(container)]
+    if isinstance(container, (set, frozenset)):
+        return [("", x) for x in sorted(container, key=short)]
+    return [("key", x) for x in container]
+
+
+def _missing_from_items(item: Any, container: Any, diff: Diff) -> None:
+    items = _candidates(container)
+    if not items:
+        return
+    if _number(item):
+        numbers = [(label, x) for label, x in items if _number(x)]
+        close = sorted(numbers, key=lambda pair: abs(pair[1] - item))[:3]
+        if close:  # the nearest, and others only about as near
+            near = max(abs(close[0][1] - item) * 10, abs(item) * 0.01)
+            close = [pair for pair in close if abs(pair[1] - item) <= near]
+    else:
+        wanted = item if isinstance(item, str) else short(item, 1000)
+        keyed = {}
+        for label, x in items:
+            keyed.setdefault(x if isinstance(x, str) and isinstance(item, str) else short(x, 1000), (label, x))
+        names = difflib.get_close_matches(wanted, list(keyed), n=3, cutoff=0.6)
+        close = [keyed[name] for name in names]
+    noun = "keys" if isinstance(container, dict) else "items"
+    diff.lines.append(
+        Text.assemble(("- ", LEFT), (short(item), LEFT), (f"   not among the {len(items)} {noun}", "dim"))
+    )
+    for label, x in close:
+        line = Text("  ")
+        if isinstance(x, str) and isinstance(item, str):
+            _, b = _highlight(repr(item), repr(x))
+        else:
+            b = Text(short(x), style=RIGHT)
+        line.append(f"{label} " if label and label != "key" else "", style="bold")
+        line.append_text(b)
+        if _number(item) and _number(x):
+            line.append(f"   Δ {x - item:+g}", style="dim")
+        diff.lines.append(line)
+    if close:
+        label, x = close[0]
+        where = f" {label}" if label.startswith("[") else ""
+        diff.changes.append(f"not among the {len(items)} {noun}; closest{where} {short(x, 30)}")
+    else:
+        diff.changes.append(f"not among the {len(items)} {noun}")
+
+
+def _found_in_items(item: Any, container: Any, diff: Diff) -> None:
+    if isinstance(container, (list, tuple)):
+        at = [i for i, x in enumerate(container) if _equal(x, item)]
+        if not at:
+            return
+        shown = ", ".join(f"[{i}]" for i in at[:5]) + (" …" if len(at) > 5 else "")
+        diff.lines.append(Text.assemble(("  ", ""), (short(item), LEFT_HI), (f"   at {shown}", "dim")))
+        diff.changes.append(f"found at {shown}")
+    elif isinstance(container, dict):
+        diff.lines.append(Text.assemble(("  ", ""), (short(item), LEFT_HI), (": " + short(container.get(item)), "dim")))
+        diff.changes.append(f"a key, with {short(container.get(item), 30)}")
 
 
 def _walk(left: Any, right: Any, diff: Diff, indent: str, path: str, depth: int) -> bool:
@@ -265,3 +422,36 @@ def _sequences(left, right, diff: Diff, indent: str, path: str, depth: int) -> N
     if len(left) != len(right):
         # last: the items that changed say more than the length does
         diff.changes.append(f"{path + ': ' if path else ''}length {len(left)} → {len(right)}")
+
+
+OPS = ("==", "in", "not in")  # the comparisons diffed
+REPORT_ATTR = "glow_diff"  # the report attribute a worker's diff travels in: not a user property, kept out of junitxml
+
+
+class Recorder:
+    """On an xdist worker: diffs a failed assert there, where its operands are, and sends it along with the report."""
+
+    def __init__(self) -> None:
+        self._compare: tuple | None = None
+
+    def pytest_runtest_logstart(self) -> None:
+        self._compare = None
+
+    def pytest_assertrepr_compare(self, op: str, left: Any, right: Any) -> None:
+        if op in OPS:
+            self._compare = (op, left, right)
+
+    @pytest.hookimpl(wrapper=True)
+    def pytest_runtest_makereport(self, call: Any):
+        report = yield
+        compare, self._compare = self._compare, None
+        if report.failed and call.excinfo is not None:
+            found = for_error(compare, call.excinfo.value)
+            if found is not None:
+                setattr(report, REPORT_ATTR, found.dump())
+        return report
+
+
+def from_report(report: Any) -> Diff | None:
+    data = getattr(report, REPORT_ATTR, None)
+    return Diff.load(data) if data else None
