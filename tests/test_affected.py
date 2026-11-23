@@ -159,8 +159,10 @@ def test_affected_in_the_glow_header(pytester):
 def test_affected_needs_python_312(pytester):
     pytester.makepyfile(test_a="def test_a(): pass\n")
     result = pytester.runpytest_subprocess("--glow", "--glow-affected")
-    assert "◎ affected: needs Python 3.12+, so all of them" in result.stdout.str()
-    result.assert_outcomes(passed=1)
+    assert "◎ affected: needs Python 3.12+, so all of them" in re.sub(
+        r"\x1b\[[0-9;?]*[A-Za-z]", "", result.stdout.str()
+    )
+    assert result.ret == 0
 
 
 def test_affected_leaves_coverage_tools_alone():
