@@ -189,7 +189,7 @@ class GlowReporter(TerminalReporter):
         self._failures: list[Failure] = []
         self._flaky: list[tuple[str, int, str]] = []  # (nodeid, attempts it took, how it failed first)
         self._tracebacks: dict[tuple[str, str], Any] = {}
-        self._compare: tuple[Any, Any] | None = None  # operands of the last failed `==` assertion
+        self._compare: tuple[str, Any, Any] | None = None  # (op, left, right) of the last comparison explained
         self._diffs: dict[tuple[str, str], assert_diff.Diff] = {}
         self._collect_errors: list[Any] = []
         self._workers: set[str] = set()
@@ -471,13 +471,9 @@ class GlowReporter(TerminalReporter):
         if not report.failed or call.excinfo is None:
             return report
         key = (report.nodeid, report.when)
-        error = call.excinfo.value
-        # a `==` caught earlier in the test (pytest.raises) mustn't be blamed for a later, different assert
-        if compare is not None and isinstance(error, AssertionError) and " == " in str(error).split("\n", 1)[0]:
-            # diffed now, while the operands are as the assertion saw them
-            found = assert_diff.explain(*compare)
-            if found is not None:
-                self._diffs[key] = found
+        found = assert_diff.for_error(compare, call.excinfo.value)  # now, while the operands are as the assert saw them
+        if found is not None:
+            self._diffs[key] = found
         if self._tbstyle in ("auto", "long"):
             with contextlib.suppress(Exception):
                 self._tracebacks[key] = render.rich_traceback(
@@ -508,9 +504,13 @@ class GlowReporter(TerminalReporter):
             fixturedef.addfinalizer(tearing_down)
 
     def pytest_assertrepr_compare(self, config: pytest.Config, op: str, left: Any, right: Any) -> None:
-        # Only remembered: pytest still writes its own explanation, for --tb=short, xdist and the like.
-        if op == "==":
-            self._compare = (left, right)
+        # Only remembered: pytest still writes its own explanation, for --tb=short and the like.
+        if op in assert_diff.OPS:
+            self._compare = (op, left, right)
+
+    @pytest.hookimpl(optionalhook=True)
+    def pytest_configure_node(self, node: Any) -> None:
+        node.workerinput["glow"] = True  # so the worker diffs failed asserts for us: see diff.Recorder
 
     def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
         self._tests_ran = True
@@ -540,7 +540,8 @@ class GlowReporter(TerminalReporter):
                 ts.outcome = category
             if report.failed:
                 key = (report.nodeid, report.when)
-                self._failures.append(Failure(report, self._tracebacks.pop(key, None), self._diffs.pop(key, None)))
+                found = self._diffs.pop(key, None) or assert_diff.from_report(report)
+                self._failures.append(Failure(report, self._tracebacks.pop(key, None), found))
             flaky = rerun.flaky(report) if report.when == "call" and report.passed else None
             if flaky is not None:
                 self._flaky.append((report.nodeid, *flaky))
@@ -864,7 +865,11 @@ class GlowReporter(TerminalReporter):
             else:
                 self.console.print(Panel(render.longrepr_text(str(report.longreprtext)), border_style="red"))
             if failure.diff is not None and self._tbstyle in ("auto", "long"):
-                title = Text.assemble(" ", ("− left", assert_diff.LEFT), "  ", ("+ right", assert_diff.RIGHT), " ")
+                title = (
+                    Text(f" {failure.diff.title} ", style="bold")
+                    if failure.diff.title
+                    else Text.assemble(" ", ("− left", assert_diff.LEFT), "  ", ("+ right", assert_diff.RIGHT), " ")
+                )
                 self.console.print(render.GlowPanel(failure.diff.render(), render.GRADIENTS["glow"], title))
             if same:
                 self._print_same(same)

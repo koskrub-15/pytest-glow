@@ -20,7 +20,10 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 - rich tracebacks: highlighted source, locals (without pytest's `@py_assert` noise), captured output
 - diffs for failed `==` asserts on dicts, lists, sets, strings, numbers, dataclasses and namedtuples: only what
   changed, nested paths like `user.address.city`, changed characters lit up. The failure one-liners say it
-  too: `role: 'user' → 'admin'` instead of `assert {'name': 'gra...active': True} == {...}`
+  too: `role: 'user' → 'admin'` instead of `assert {'name': 'gra...active': True} == {...}`. Also under xdist
+- for a failed `in`, the near misses: `'3 new messages'` not in the page, but `'3 new mesages'` at char 50;
+  `'admin'` not in the roles, closest `[3] 'admins'`; `8080` not in the ports, closest `8081`. For `not in`,
+  where it was found, lit up in its context
 - failures that failed the same way (same place, same message) grouped under one traceback: a database
   that's down is one failure with "+39 more like this", not forty tracebacks
 - warnings grouped by message, the slowest tests, a short list of what failed
@@ -150,8 +153,8 @@ your tests get measured too.
 - Linux and macOS. On Windows glow only runs with an explicit `--glow` (it's untested there).
 - Works with pytest-xdist, pytest-cov, `breakpoint()`/`--pdb`, `-x`, `-s`, `--durations`, and plugins that
   add their own terminal summary.
-- Under xdist, tracebacks show pytest's highlighted text rather than rich tracebacks and assertion diffs, since
-  the exceptions stay in the worker processes.
+- Under xdist, tracebacks show pytest's highlighted text rather than rich tracebacks, since the exceptions stay
+  in the worker processes (assertion diffs come along).
 - Not supported yet: `-r` short-summary flags (`-rA`, `-rP`, ...) beyond the failure list.
 
 ## Try the demo

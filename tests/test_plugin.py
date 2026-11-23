@@ -334,6 +334,35 @@ def test_assertion_diffs(pytester):
     assert "1 ≠ 2" not in out
 
 
+def test_in_diffs(pytester):
+    pytester.makepyfile(
+        test_t="def test_roles():\n    assert 'admin' in ['user', 'admins']\n"
+        "def test_secret():\n    assert 'pw=' not in 'login pw=hunter2'\n"
+    )
+    _, out = run(pytester, "--glow")
+    assert "test_roles  not among the 2 items; closest [1] 'admins'" in out
+    assert "not in there" in out and "found, and shouldn't be" in out
+    assert "test_secret  found at char 6" in out
+
+
+def test_diffs_under_xdist(pytester):
+    pytest.importorskip("xdist")
+    pytester.makepyfile(test_t="def test_payload():\n    assert {'role': 'user'} == {'role': 'admin'}\n")
+    _, out = run(pytester, "--glow", "-n", "2")
+    assert "test_payload  role: 'user' → 'admin'" in out
+    assert "~ 'role': 'user' → 'admin'" in out
+
+
+def test_no_diffs_sent_from_workers_without_glow(pytester):
+    pytest.importorskip("xdist")
+    pytester.makepyfile(test_t="def test_payload():\n    assert {'role': 'user'} == {'role': 'admin'}\n")
+    pytester.makeconftest(
+        "def pytest_runtest_logreport(report):\n    if report.failed: print('ATTR', hasattr(report, 'glow_diff'))\n"
+    )
+    result = pytester.runpytest_subprocess("-n", "1", "-s", "--junitxml=out.xml")
+    assert "ATTR False" in result.stdout.str()
+
+
 def test_short_tracebacks_keep_pytest_text(pytester):
     pytester.makepyfile(test_t="def test_payload():\n    assert {'role': 'user'} == {'role': 'admin'}\n")
     _, out = run(pytester, "--glow", "--tb=short")

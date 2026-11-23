@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from pytest_glow.diff import explain
+from pytest_glow.diff import Diff, explain, explain_in, for_error
 
 
 def lines(left, right):
@@ -90,3 +90,58 @@ def test_a_broken_eq_does_not_break_the_report():
 def test_huge_diffs_are_cut():
     out, _ = lines(list(range(200)), [x + 1 if x % 2 else x for x in range(200)])
     assert len(out) == 41 and out[-1].startswith("… ")
+
+
+def missing(item, container, negated=False):
+    found = explain_in(item, container, negated)
+    assert found is not None
+    return found.render().plain.splitlines(), found.summary
+
+
+def test_a_near_miss_in_text():
+    out, summary = missing("3 new messages", "<p>You have 3 new mesages</p>")
+    assert out == ["- '3 new messages'   looked for", "+ '3 new mesages'   closest, at char 12"]
+    assert summary == "not in the text; closest '3 new mesages' at char 12"
+
+
+def test_near_misses_among_items_and_keys():
+    out, summary = missing("admin", ["user", "guest", "admins"])
+    assert out == ["- 'admin'   not among the 3 items", "  [2] 'admins'"]
+    assert summary == "not among the 3 items; closest [2] 'admins'"
+    _, summary = missing("user_id", {"userid": 1, "name": "x"})
+    assert summary == "not among the 2 keys; closest 'userid'"
+
+
+def test_near_numbers_only():
+    out, _ = missing(8080, [80, 443, 8000, 8081])
+    assert out == ["- 8080   not among the 4 items", "  [3] 8081   Δ +1", "  [2] 8000   Δ -80"]
+
+
+def test_where_it_is_when_it_should_not_be():
+    out, summary = missing("password=", "connect with password=hunter2", negated=True)
+    assert out == ["  connect with password=hunter2"] and summary == "found at char 13"
+    _, summary = missing(2, [1, 2, 3, 2], negated=True)
+    assert summary == "found at [1], [3]"
+
+
+def test_nothing_near_is_still_said():
+    _, summary = missing("zzz", ["a", "b"])
+    assert summary == "not among the 2 items"
+    assert explain_in("zzz", "a long text with nothing like it") is None
+
+
+def test_only_the_assert_that_failed_is_diffed():
+    compare = ("==", {"a": 1}, {"a": 2})
+    assert for_error(compare, AssertionError("assert {'a': 1} == {'a': 2}")) is not None
+    assert for_error(compare, AssertionError("assert not 'a non-comparison'")) is None
+    assert for_error(compare, ValueError("assert {'a': 1} == {'a': 2}")) is None
+    found = for_error(("in", "admn", "admin rights"), AssertionError("assert 'admn' in 'admin rights'"))
+    assert found.title == "not in there"
+
+
+def test_diffs_travel_as_plain_data():
+    found = explain({"role": "user"}, {"role": "admin"})
+    back = Diff.load(found.dump())
+    assert back.render().plain == found.render().plain and back.summary == found.summary
+    assert back.render().spans == found.render().spans
+    assert Diff.load({"nonsense": 1}) is None
