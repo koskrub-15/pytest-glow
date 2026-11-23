@@ -28,7 +28,8 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 - with `--glow-profile`, where the time goes: under each slow test `↳ test 12% · your code 61% · libs 27%
   (sqlalchemy)`, and for the whole run fixtures, tests, your code and libraries on one bar, with the
   libraries that take the most (`in fixtures: argon2 5.40s`). It samples the stack every 5 ms, so it costs
-  about nothing; time in C code (a `sleep`, a socket, numpy) counts for the Python code that called it
+  about nothing; time in C code (a `sleep`, a socket, numpy) counts for the Python code that called it.
+  On macOS it gets a look in only every ~45 ms, so a test needs half a second or so for a breakdown of its own
 - paths you can click: tests, files and failures open in the editor (VS Code's terminal opens at the line)
 - a verdict panel with the counts and a proportional bar
 - the command to rerun just the failures (`pytest --lf` when there are many)

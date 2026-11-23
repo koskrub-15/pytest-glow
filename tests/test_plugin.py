@@ -1,4 +1,5 @@
 import re
+import sys
 
 import pytest
 
@@ -936,17 +937,33 @@ def _profiled_project(pytester):
     )
 
 
+# macOS wakes a waiting thread next to a busy one only every ~45ms (Linux: 10ms), so a test this short gets
+# too few samples there for a breakdown of its own
+_COARSE = pytest.mark.skipif(sys.platform == "darwin", reason="too few samples of a short test on macOS")
+
+
+@_COARSE
 def test_glow_profile(pytester):
     _profiled_project(pytester)
     _, out = run(pytester, "--glow", "--glow-profile")
-    found = re.search(r"↳ test (\d+)% · your code (\d+)% · fixtures (\d+)%", out)
+    # a few samples can land in the stdlib (contextlib, around the fixture): "libs 1% (contextlib)" in between
+    found = re.search(r"↳ test (\d+)% · your code (\d+)% ·(?: libs \d+% \(\w+\) ·)?\s+fixtures (\d+)%", out)
     assert found, out
     test, code, fixtures = map(int, found.groups())
+    assert re.search(r"\d+ms  ━{12}  test_slow\.py::test_slow", out), out  # the time and bar aren't squeezed
     assert 5 <= test <= 30 and 45 <= code <= 75 and 15 <= fixtures <= 45
     assert re.search(r"where \S+ in tests went", out)
     assert re.search(r"in fixtures: your code \d+ms", out)
 
 
+def test_glow_profile_summary(pytester):
+    _profiled_project(pytester)
+    _, out = run(pytester, "--glow", "--glow-profile")
+    assert re.search(r"where \S+ in tests went", out)
+    assert re.search(r"in fixtures: your code \d+ms", out)
+
+
+@_COARSE
 def test_glow_profile_under_xdist(pytester):
     pytest.importorskip("xdist")
     _profiled_project(pytester)

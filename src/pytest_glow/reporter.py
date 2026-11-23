@@ -1086,8 +1086,9 @@ class GlowReporter(TerminalReporter):
         self.console.print()
         self.console.print(Text("  slowest", style="bold dim"))
         table = Table.grid(padding=(0, 2))
-        table.add_column(justify="right", no_wrap=True)
-        table.add_column(no_wrap=True)
+        # the widths: a long --glow-profile breakdown would squeeze the times and bars otherwise
+        table.add_column(justify="right", no_wrap=True, min_width=2 + max(len(render.fmt_dur(d)) for d, _ in slowest))
+        table.add_column(no_wrap=True, min_width=12)
         table.add_column(no_wrap=True, overflow="ellipsis")
         table.add_column(no_wrap=True)
         table.add_column(no_wrap=True)
@@ -1125,7 +1126,7 @@ class GlowReporter(TerminalReporter):
         spent = prof.split(ts.duration - ts.fixtures, sampled)
         spent["fixtures"] = ts.fixtures
         top_lib = next(iter(sampled.get("libs", {})), None)
-        text = Text("↳ ", style="dim")
+        text = Text("↳ ", style="dim", no_wrap=False, overflow="fold")  # wraps rather than cut a share off
         for kind, label in (("test", "test"), ("code", "your code"), ("lib", "libs"), ("fixtures", "fixtures")):
             share = spent.get(kind, 0) / ts.duration
             if share < 0.01:
