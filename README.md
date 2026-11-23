@@ -36,6 +36,8 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 - tips, when something takes a good part of the run: `💡 auth_client is set up 54× at 108ms each: 5.85s, 49% of
   the run`, with what to do about it (`scope="module"`). With `--glow-profile`, also libraries slow on purpose
   (`💡 argon2 takes 7.46s, 63% of the run`: cheaper hashing in tests) and tests that sleep
+- the tests that go online, and where to: `🌐 2 tests go online · example.com:443 test_github`. Localhost,
+  docker and other private addresses don't count; it notes the connection, never blocks it
 - paths you can click: tests, files and failures open in the editor (VS Code's terminal opens at the line)
 - a verdict panel with the counts and a proportional bar
 - the command to rerun just the failures (`pytest --lf` when there are many)
@@ -53,7 +55,8 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
   (apps/services/month.py)`; nothing changed, nothing runs, and that's a pass. When no test runs code from a
   changed file (a module of constants), it can't tell who uses it and runs everything; a changed `conftest.py`
   runs the tests under it. Python files only: a changed JSON fixture isn't noticed. Python 3.12+ (it uses
-  `sys.monitoring`, about 1% slower); works under xdist and with `--no-glow`
+  `sys.monitoring`, about 1% slower); works under xdist and with `--no-glow`. When it leaves tests out, coverage
+  isn't counted (it would be that of the part that ran) and `--cov-fail-under` doesn't fail the run
 - `--glow-rerun[=N]`: a failed test runs again, up to N times. One that then passes is called out as flaky with
   how it failed the first time, and the run is GREEN, BUT FLAKY rather than red. Works under xdist and in CI
 
@@ -79,7 +82,8 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
   Speedrunner, Surgeon, Clean Sweep, Centurion, Friday Deploy, Archaeologist, Glass Cannon, Unstoppable,
   Boss Slayer, Shiny Hunter
 - XP for every run (passes, green, combos, fixed tests, boss kills) and levels with titles, from Print
-  Debugger to The One Who Runs pytest. A level up gets confetti and its own jingle
+  Debugger to The One Who Runs pytest. A level up gets confetti and its own jingle. Past Lv 50 comes a
+  PRESTIGE: back to Lv 1 with a ★ before your level, for good
 - one green run in 500 comes out ✦ SHINY ✦: gold verdict, sparkle, 250 bonus XP
 - daily quests: three a day, the same all day ("fix 3 tests", "a ×50 combo", "red → green", "green before
   10am"…), with their progress in the verdict and XP when done. `PYTEST_GLOW_QUESTS=0` turns them off
@@ -92,7 +96,8 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
   ENRAGED, below a tenth it makes its LAST STAND, and once slain it drops loot: sixteen items, common to
   legendary, to collect per project
 - `pytest --glow-wrapped`: your project's year-in-review. Runs, time spent, green rate, level, records, a hall
-  of shame (failed the most, flakiest, slowest), the hours you test at, loot and achievements. Runs no tests
+  of shame (failed the most, flakiest, slowest), who you were this week (🦉 Night Owl, 🔁 Rerun Goblin, 🩹 Medic,
+  🐇 Speed Demon…), the hours you test at, loot and achievements. Runs no tests
 - `--glow-share`: the run as an SVG card, ready to post
 - `--glow-sound`: 8-bit sounds, synthesized on the fly (nothing to license): a power-up at combo 10, 25, 50,
   100…, a slide down on a COMBO BREAKER, hits and crits on the boss, then a level-clear jingle, an air horn for

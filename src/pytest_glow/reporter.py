@@ -26,7 +26,7 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, advice, hang, progress, quests, render, rerun, share, sound
+from . import __version__, advice, hang, net, progress, quests, render, rerun, share, sound
 from . import achievements as ach
 from . import affected as aff
 from . import coverage as cov
@@ -36,7 +36,7 @@ from .blame import ago, blame, changed_since, commits_since, describe, head
 from .boss import HEARTS, Fight, arena, drop, loot_line, outcome
 from .history import History, is_flaky
 from .order import GROUPS
-from .plugin import AFFECTED, ORDERED, flag
+from .plugin import AFFECTED, ORDERED, flag, partial_run
 
 SUMMARY_EXIT_CODES = (
     pytest.ExitCode.OK,
@@ -59,6 +59,7 @@ MAX_RERUN_IDS = 3  # beyond this, the rerun hint is `pytest --lf`
 SHINY_ODDS = 1 / 500  # the chance that a green run comes out shiny
 MIN_SAMPLES = 10  # fewer samples of a test than this, and its shares are noise
 PROFILE_STYLES = {"fixtures": "#6b7280", "test": "#22d3ee", "code": "#e879f9", "lib": "#facc15"}
+NET_SHOWN = 4  # hosts listed under "tests go online"
 GHOST_MIN = 3.0  # seconds a personal best has to take for its ghost to race this run
 SLOWER = 2.0  # a test this many times its usual duration (and 100ms more) is called out
 
@@ -179,6 +180,7 @@ class GlowReporter(TerminalReporter):
         self._fixture_time = 0.0
         self._fixture_spent: Counter = Counter()  # in setup and teardown: seconds by library, "your code"…
         self._slept: Counter = Counter()  # nodeid -> seconds in time.sleep
+        self._online: dict[str, list[str]] = {}  # "host:port" -> the tests that connected to it
         self._live: Live | None = None
         self._lock = threading.RLock()
         self._capture_off = config.getoption("capture", "fd") == "no"
@@ -210,6 +212,7 @@ class GlowReporter(TerminalReporter):
         self._collect_spinner = Spinner("dots", style="magenta")
         self._history = History(getattr(config, "cache", None))
         self._coverage: cov.CoverageResult | None = None
+        self._partial: str | None = None  # --glow-affected ran only part of the suite: how much
         started = time.localtime()
         self._hour, self._weekday = started.tm_hour, started.tm_wday
         self._combo = 0
@@ -571,6 +574,8 @@ class GlowReporter(TerminalReporter):
         with self._lock:
             ts = self._tests.setdefault(report.nodeid, TestState())
             ts.duration += report.duration
+            for where in net.of(report):
+                self._online.setdefault(where, []).append(report.nodeid)
             slept = (prof.profile(report) or {}).get("sleep")
             if slept:
                 self._slept[report.nodeid] += slept
@@ -867,12 +872,19 @@ class GlowReporter(TerminalReporter):
             self._print_failures()
             self._print_warnings()
         self._coverage = cov.collect(self.config)
-        if self._coverage is None:
+        self._partial = partial_run(self.config)
+        measured_part = self._coverage is not None and self._partial is not None
+        if measured_part:  # of the tests that ran, not of the project: not worth a number
+            self._coverage = None
+        elif self._coverage is None:
             for content in self._suppressed:
                 self._print(Text(content.strip(), style="bold red"))
         if exitstatus in SUMMARY_EXIT_CODES:
             self.config.hook.pytest_terminal_summary(terminalreporter=self, exitstatus=exitstatus, config=self.config)
         self._print_coverage()
+        if measured_part:
+            self._print()
+            self._print(Text(f"  ☂ coverage: not counted, {self._partial} (--glow-affected)", style="dim"))
         get_max = getattr(self, "_get_max_warnings", None)
         max_warnings = get_max() if get_max else None
         if max_warnings is not None and session.exitstatus == pytest.ExitCode.OK:
@@ -895,6 +907,7 @@ class GlowReporter(TerminalReporter):
             self._print_fixtures()
             self._print_profile()
             self._print_tips()
+            self._print_network()
             self._print_insights()
             self._print_achievements()
             self._print_changes()
@@ -1304,6 +1317,26 @@ class GlowReporter(TerminalReporter):
             self._print(Text.assemble("  💡 ", (tip.what, "bold")))
             self.console.print(Padding(Text(tip.do, style="dim"), (0, 0, 0, 5)))  # wraps: it's the point
 
+    def _print_network(self) -> None:
+        """Tests that went out to the internet: slow, flaky, and red on a plane."""
+        if not self._online or self._verbose < 0:
+            return
+        tests = {nodeid for nodeids in self._online.values() for nodeid in nodeids}
+        self.console.print()
+        head = "1 test goes" if len(tests) == 1 else f"{len(tests)} tests go"
+        self._print(Text.assemble("  🌐 ", (f"{head} online", "bold"), (" · slow, flaky, and red on a plane", "dim")))
+        ranked = sorted(self._online.items(), key=lambda item: -len(item[1]))
+        for where, nodeids in ranked[:NET_SHOWN]:
+            line = Text.assemble("     ", (where, "bold #22d3ee"), "  ")
+            line.append(render.test_name(nodeids[0]), style="dim")
+            if len(nodeids) > 1:
+                line.append(f" +{len(nodeids) - 1}", style="dim")
+            self._print(line)
+        if len(ranked) > NET_SHOWN:
+            self._print(Text(f"     +{len(ranked) - NET_SHOWN} more hosts", style="dim"))
+        hint = "fake them (responses, respx, pytest-recording), or mark them so a plain run can skip them"
+        self.console.print(Padding(Text(hint, style="dim"), (0, 0, 0, 5)))
+
     def _print_fixtures(self) -> None:
         ranked = sorted(self._fixtures.items(), key=lambda item: -item[1].total)[:5]
         if not ranked or ranked[0][1].total < 0.2:
@@ -1520,7 +1553,7 @@ class GlowReporter(TerminalReporter):
             counts=Counter(self._counts),
             done=self._done,
             warnings=len(self.stats.get("warnings", [])),
-            prior_runs=history.runs,
+            prior_runs=history.runs[-30:],  # what "all green before" means for first blood
             green_streak=history.greens + 1 if ok else 0,
             new_pb=self._new_pb is not None,
             longest_fixed_streak=max(fixed_streaks, default=0),
@@ -1574,7 +1607,7 @@ class GlowReporter(TerminalReporter):
         if self._xp is None:
             return False
         before, gained = self._xp
-        return progress.level_of(before + gained)[0] > progress.level_of(before)[0]
+        return progress.rank(before + gained) > progress.rank(before)  # a prestige is one too
 
     def _print_achievements(self) -> None:
         if not self._unlocked:

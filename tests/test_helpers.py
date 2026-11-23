@@ -379,6 +379,18 @@ def test_xp_line():
     assert "new title" not in progress.xp_line(90, 20).plain
 
 
+def test_prestige_past_the_last_level():
+    from pytest_glow import progress
+
+    cycle = progress._cycle()
+    assert progress.level_of(cycle - 1)[0] == progress.PRESTIGE_AT
+    assert progress.rank(cycle) == (1, 1) and progress.level_of(cycle + 150) == (2, 50, 150)
+    line = progress.xp_line(cycle - 10, 35).plain
+    assert line.startswith("★ PRESTIGE") and "back to Lv 1, with a star ★" in line
+    assert progress.xp_line(cycle, 35).plain == "✦ +35 XP  ★ Lv 1 Print Debugger ▰▰▰▰▱▱▱▱▱▱ 35/100"
+    assert progress.stars_text(cycle * 5).plain == "★×5"
+
+
 def test_lifetime_tally():
     from pytest_glow.history import History
 
@@ -620,3 +632,36 @@ def test_profile_breakdown_breaks_between_shares():
     breakdown = GlowReporter._breakdown(SimpleNamespace(), ts, 57).plain
     assert breakdown == "↳ test 15% · your code 55% · libs 2% (contextlib) ·\n  fixtures 29%"
     assert "\n" not in GlowReporter._breakdown(SimpleNamespace(), ts, 80).plain
+
+
+def test_wrapped_roles_of_the_week():
+    import time
+
+    from pytest_glow.wrapped import roles
+
+    def at(day, hour, **run):  # day 0 is Monday 2026-11-16
+        return {"t": time.mktime((2026, 11, 16 + day, hour, 0, 0, 0, 0, -1)), "d": 1.0, "n": 10, "ok": True, **run}
+
+    now = at(6, 23)["t"]
+    assert roles([], now) == []
+    assert roles([at(-14, 12)], now) == []  # nothing this week
+    assert [r[1] for r in roles([at(1, 12)], now)] == ["Zen Master"]
+
+    owl = [at(2, 2), at(3, 3), at(4, 1, ok=False), at(4, 9)]
+    found = roles(owl, now)
+    assert found[0] == ("🦉", "Night Owl", "3 runs after midnight")
+
+    medic = [at(1, 12 + i % 2, ok=bool(i % 2)) for i in range(6)]
+    assert ("🩹", "Medic", "brought it back to green 3×") in roles(medic, now)
+
+    farmer = [at(0, 12, n=10), at(2, 12, n=30)]
+    assert ("🌱", "Test Farmer", "+20 tests since the week began") in roles(farmer, now)
+
+    faster = [at(-5, 12, d=10.0)] * 3 + [at(1, 12, d=5.0)] * 3
+    assert ("🐇", "Speed Demon", "green runs 50% faster than the week before") in roles(faster, now)
+
+    goblin = [at(2, 10) for _ in range(30)]
+    found = roles(goblin, now)
+    assert found[0] == ("🔁", "Rerun Goblin", "30 runs on Wednesday alone")
+    assert ("🧱", "Unbreakable", "30 runs, not one red") in found
+    assert len(roles(owl + goblin + medic, now)) == 3

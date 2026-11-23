@@ -225,6 +225,7 @@ def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config
         if choice.deselected:
             items[:] = choice.selected
             config.hook.pytest_deselected(items=choice.deselected)
+            _partial_coverage(config)
     if not flag(config, "ff") or not items:
         return
     from . import order
@@ -245,6 +246,28 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         nothing = getattr(session.config.option, "dist", "no") != "no"
     if nothing:
         session.exitstatus = pytest.ExitCode.OK
+
+
+def partial_run(config: pytest.Config) -> str | None:
+    """--glow-affected left tests out: what ran is a part of the suite, and its coverage a part of the truth."""
+    affected = config.stash.get(AFFECTED, {})
+    if not affected.get("stored", {}).get("tests"):
+        return None
+    choice = affected.get("choice")
+    if choice is None:  # an xdist controller: the workers picked, it can't tell how many
+        return "the workers ran only what's affected" if getattr(config.option, "dist", "no") != "no" else None
+    if not choice.deselected:
+        return None
+    if not choice.selected:
+        return "no test ran"
+    return f"only {len(choice.selected)} of {len(choice.selected) + len(choice.deselected)} tests ran"
+
+
+def _partial_coverage(config: pytest.Config) -> None:
+    """A --cov-fail-under can't be met by part of the suite: don't fail it for that."""
+    options = getattr(config.pluginmanager.get_plugin("_cov"), "options", None)
+    if options is not None and getattr(options, "cov_fail_under", None):
+        options.cov_fail_under = None
 
 
 def _start_affected(config: pytest.Config) -> None:
@@ -281,8 +304,10 @@ def pytest_configure(config: pytest.Config) -> None:
         _start_affected(config)
     if getattr(config, "workerinput", {}).get("glow"):  # an xdist worker of a glowing run
         from .diff import Recorder
+        from .net import Watcher
 
         config.pluginmanager.register(Recorder(), "glow-diff")
+        config.pluginmanager.register(Watcher(), "glow-net")
     if flag(config, "profile"):
         from .profile import Profiler
 
@@ -306,3 +331,7 @@ def pytest_configure(config: pytest.Config) -> None:
     reporter = GlowReporter(config, stream, force=bool(wanted))
     config.pluginmanager.unregister(standard)
     config.pluginmanager.register(reporter, "terminalreporter")
+    if not hasattr(config, "workerinput") and getattr(config.option, "dist", "no") == "no":
+        from .net import Watcher  # under xdist, the workers watch
+
+        config.pluginmanager.register(Watcher(), "glow-net")
