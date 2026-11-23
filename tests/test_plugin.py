@@ -643,7 +643,7 @@ def test_xp_and_level_up(pytester):
     assert "47/150" in out
 
 
-SHINY = "import pytest_glow.reporter\npytest_glow.reporter.SHINY_ODDS = 1.0\n"
+SHINY = "import os\nos.environ['PYTEST_GLOW_SHINY_ODDS'] = '1'\n"
 
 
 def test_shiny_run(pytester):

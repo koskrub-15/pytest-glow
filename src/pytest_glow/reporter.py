@@ -802,7 +802,7 @@ class GlowReporter(TerminalReporter):
                 self._print(Text(f"Tests pass, but maximum allowed warnings exceeded: {n} > {max_warnings}", "red"))
         self._duration = time.monotonic() - self._t_start
         self._shiny = bool(
-            self._done and not self._failing() and exitstatus == pytest.ExitCode.OK and random.random() < SHINY_ODDS
+            self._done and not self._failing() and exitstatus == pytest.ExitCode.OK and random.random() < float(os.environ.get("PYTEST_GLOW_SHINY_ODDS", SHINY_ODDS))
         )
         if self._boss_won() and exitstatus == pytest.ExitCode.OK:
             self._loot = drop()
