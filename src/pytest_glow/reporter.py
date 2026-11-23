@@ -1599,7 +1599,7 @@ class GlowReporter(TerminalReporter):
         if self._xp is None:
             return False
         before, gained = self._xp
-        return progress.level_of(before + gained)[0] > progress.level_of(before)[0]
+        return progress.rank(before + gained) > progress.rank(before)  # a prestige is one too
 
     def _print_achievements(self) -> None:
         if not self._unlocked:

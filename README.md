@@ -81,7 +81,8 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
   Speedrunner, Surgeon, Clean Sweep, Centurion, Friday Deploy, Archaeologist, Glass Cannon, Unstoppable,
   Boss Slayer, Shiny Hunter
 - XP for every run (passes, green, combos, fixed tests, boss kills) and levels with titles, from Print
-  Debugger to The One Who Runs pytest. A level up gets confetti and its own jingle
+  Debugger to The One Who Runs pytest. A level up gets confetti and its own jingle. Past Lv 50 comes a
+  PRESTIGE: back to Lv 1 with a ★ before your level, for good
 - one green run in 500 comes out ✦ SHINY ✦: gold verdict, sparkle, 250 bonus XP
 - daily quests: three a day, the same all day ("fix 3 tests", "a ×50 combo", "red → green", "green before
   10am"…), with their progress in the verdict and XP when done. `PYTEST_GLOW_QUESTS=0` turns them off

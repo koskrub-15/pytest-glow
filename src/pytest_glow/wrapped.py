@@ -91,7 +91,11 @@ def render_wrapped(history: History, project: str) -> render.GlowPanel | Text:
     xp = history.xp
     if xp:
         level, into, needed = progress.level_of(xp)
-        lv = Text.assemble("  ", (f"Lv {level} {progress.title(level)}  ", "bold magenta"))
+        lv = Text("  ")
+        if progress.stars(xp):
+            lv.append_text(progress.stars_text(xp))
+            lv.append(" ")
+        lv.append(f"Lv {level} {progress.title(level)}  ", style="bold magenta")
         lv.append_text(progress.xp_bar(into, needed, 14))
         lv.append(f"  {xp:,} XP".replace(",", " "), style="dim")
         lines += [Text(""), lv]

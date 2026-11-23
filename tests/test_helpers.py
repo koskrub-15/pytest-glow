@@ -379,6 +379,18 @@ def test_xp_line():
     assert "new title" not in progress.xp_line(90, 20).plain
 
 
+def test_prestige_past_the_last_level():
+    from pytest_glow import progress
+
+    cycle = progress._cycle()
+    assert progress.level_of(cycle - 1)[0] == progress.PRESTIGE_AT
+    assert progress.rank(cycle) == (1, 1) and progress.level_of(cycle + 150) == (2, 50, 150)
+    line = progress.xp_line(cycle - 10, 35).plain
+    assert line.startswith("★ PRESTIGE") and "back to Lv 1, with a star ★" in line
+    assert progress.xp_line(cycle, 35).plain == "✦ +35 XP  ★ Lv 1 Print Debugger ▰▰▰▰▱▱▱▱▱▱ 35/100"
+    assert progress.stars_text(cycle * 5).plain == "★×5"
+
+
 def test_lifetime_tally():
     from pytest_glow.history import History
 

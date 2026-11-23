@@ -80,6 +80,7 @@ def test_tests_that_go_online_under_xdist(pytester):
 
 def test_the_standard_report_doesnt_watch(pytester):
     pytester.makepyfile(
-        test_n=ONLINE + "\ndef test_unpatched():\n    assert socket.socket.connect is socket.socket.__mro__[1].connect\n"
+        test_n=ONLINE
+        + "\ndef test_unpatched():\n    assert socket.socket.connect is socket.socket.__mro__[1].connect\n"
     )
     assert pytester.runpytest_subprocess("--no-glow").ret == 0
