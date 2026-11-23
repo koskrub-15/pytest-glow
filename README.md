@@ -36,6 +36,8 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 - tips, when something takes a good part of the run: `💡 auth_client is set up 54× at 108ms each: 5.85s, 49% of
   the run`, with what to do about it (`scope="module"`). With `--glow-profile`, also libraries slow on purpose
   (`💡 argon2 takes 7.46s, 63% of the run`: cheaper hashing in tests) and tests that sleep
+- the tests that go online, and where to: `🌐 2 tests go online · example.com:443 test_github`. Localhost,
+  docker and other private addresses don't count; it notes the connection, never blocks it
 - paths you can click: tests, files and failures open in the editor (VS Code's terminal opens at the line)
 - a verdict panel with the counts and a proportional bar
 - the command to rerun just the failures (`pytest --lf` when there are many)

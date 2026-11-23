@@ -26,7 +26,7 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, advice, hang, progress, quests, render, rerun, share, sound
+from . import __version__, advice, hang, net, progress, quests, render, rerun, share, sound
 from . import achievements as ach
 from . import affected as aff
 from . import coverage as cov
@@ -59,6 +59,7 @@ MAX_RERUN_IDS = 3  # beyond this, the rerun hint is `pytest --lf`
 SHINY_ODDS = 1 / 500  # the chance that a green run comes out shiny
 MIN_SAMPLES = 10  # fewer samples of a test than this, and its shares are noise
 PROFILE_STYLES = {"fixtures": "#6b7280", "test": "#22d3ee", "code": "#e879f9", "lib": "#facc15"}
+NET_SHOWN = 4  # hosts listed under "tests go online"
 GHOST_MIN = 3.0  # seconds a personal best has to take for its ghost to race this run
 SLOWER = 2.0  # a test this many times its usual duration (and 100ms more) is called out
 
@@ -179,6 +180,7 @@ class GlowReporter(TerminalReporter):
         self._fixture_time = 0.0
         self._fixture_spent: Counter = Counter()  # in setup and teardown: seconds by library, "your code"…
         self._slept: Counter = Counter()  # nodeid -> seconds in time.sleep
+        self._online: dict[str, list[str]] = {}  # "host:port" -> the tests that connected to it
         self._live: Live | None = None
         self._lock = threading.RLock()
         self._capture_off = config.getoption("capture", "fd") == "no"
@@ -571,6 +573,8 @@ class GlowReporter(TerminalReporter):
         with self._lock:
             ts = self._tests.setdefault(report.nodeid, TestState())
             ts.duration += report.duration
+            for where in net.of(report):
+                self._online.setdefault(where, []).append(report.nodeid)
             slept = (prof.profile(report) or {}).get("sleep")
             if slept:
                 self._slept[report.nodeid] += slept
@@ -895,6 +899,7 @@ class GlowReporter(TerminalReporter):
             self._print_fixtures()
             self._print_profile()
             self._print_tips()
+            self._print_network()
             self._print_insights()
             self._print_achievements()
             self._print_changes()
@@ -1303,6 +1308,26 @@ class GlowReporter(TerminalReporter):
         for tip in found:
             self._print(Text.assemble("  💡 ", (tip.what, "bold")))
             self.console.print(Padding(Text(tip.do, style="dim"), (0, 0, 0, 5)))  # wraps: it's the point
+
+    def _print_network(self) -> None:
+        """Tests that went out to the internet: slow, flaky, and red on a plane."""
+        if not self._online or self._verbose < 0:
+            return
+        tests = {nodeid for nodeids in self._online.values() for nodeid in nodeids}
+        self.console.print()
+        head = "1 test goes" if len(tests) == 1 else f"{len(tests)} tests go"
+        self._print(Text.assemble("  🌐 ", (f"{head} online", "bold"), (" · slow, flaky, and red on a plane", "dim")))
+        ranked = sorted(self._online.items(), key=lambda item: -len(item[1]))
+        for where, nodeids in ranked[:NET_SHOWN]:
+            line = Text.assemble("     ", (where, "bold #22d3ee"), "  ")
+            line.append(render.test_name(nodeids[0]), style="dim")
+            if len(nodeids) > 1:
+                line.append(f" +{len(nodeids) - 1}", style="dim")
+            self._print(line)
+        if len(ranked) > NET_SHOWN:
+            self._print(Text(f"     +{len(ranked) - NET_SHOWN} more hosts", style="dim"))
+        hint = "fake them (responses, respx, pytest-recording), or mark them so a plain run can skip them"
+        self.console.print(Padding(Text(hint, style="dim"), (0, 0, 0, 5)))
 
     def _print_fixtures(self) -> None:
         ranked = sorted(self._fixtures.items(), key=lambda item: -item[1].total)[:5]

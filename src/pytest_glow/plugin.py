@@ -281,8 +281,10 @@ def pytest_configure(config: pytest.Config) -> None:
         _start_affected(config)
     if getattr(config, "workerinput", {}).get("glow"):  # an xdist worker of a glowing run
         from .diff import Recorder
+        from .net import Watcher
 
         config.pluginmanager.register(Recorder(), "glow-diff")
+        config.pluginmanager.register(Watcher(), "glow-net")
     if flag(config, "profile"):
         from .profile import Profiler
 
@@ -306,3 +308,7 @@ def pytest_configure(config: pytest.Config) -> None:
     reporter = GlowReporter(config, stream, force=bool(wanted))
     config.pluginmanager.unregister(standard)
     config.pluginmanager.register(reporter, "terminalreporter")
+    if not hasattr(config, "workerinput") and getattr(config.option, "dist", "no") == "no":
+        from .net import Watcher  # under xdist, the workers watch
+
+        config.pluginmanager.register(Watcher(), "glow-net")

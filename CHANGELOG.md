@@ -15,6 +15,7 @@ All notable changes to this project are documented here. The format follows
 - Tips, when something takes a good part of the run: a fixture worth a wider scope, and with `--glow-profile`
   libraries slow on purpose (argon2, bcrypt…) and tests that sleep; with what to do about it.
 - `--glow-profile` keeps its numbers out of junitxml, and counts conftest fixtures as your code.
+- The tests that go online, and to which hosts: public addresses only, under xdist too.
 - The ghost of your personal best races the run, under the progress bar: ahead of it, or behind.
 - Fixed: the green streak stopped at 31.
 - Fixed: "faster than last run" compared with an older run of as many tests while saying "last run".
