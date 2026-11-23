@@ -6,6 +6,7 @@ import io
 import itertools
 import statistics
 import time
+from collections import Counter
 
 from rich.console import Console, Group
 from rich.text import Text
@@ -48,6 +49,59 @@ def quip(green_rate: float, night_share: float) -> str:
     if green_rate >= 0.5:
         return "Red, green, red, green: a Christmas tree of a codebase."
     return "Your tests are more of a suggestion."
+
+
+WEEK = 7 * 24 * 3600
+MAX_ROLES = 3
+
+
+def roles(runs: list[dict], now: float) -> list[tuple[str, str, str]]:
+    """Who you were this week, by the runs of the last seven days: (icon, role, why), the strongest first."""
+    week = [r for r in runs if now - r.get("t", 0) < WEEK]
+    if not week:
+        return []
+    before = [r for r in runs if WEEK <= now - r.get("t", 0) < 2 * WEEK]
+    when = [time.localtime(r["t"]) for r in week]
+    found: list[tuple[str, str, str]] = []
+
+    night = sum(1 for t in when if t.tm_hour < 5)
+    if night >= 3:
+        found.append(("🦉", "Night Owl", f"{night} runs after midnight"))
+    per_day = Counter(time.strftime("%A", t) for t in when)
+    day, most = per_day.most_common(1)[0]
+    if most >= 25:
+        found.append(("🔁", "Rerun Goblin", f"{most} runs on {day} alone"))
+    comebacks = sum(1 for a, b in itertools.pairwise(week) if not a.get("ok") and b.get("ok"))
+    if comebacks >= 3:
+        found.append(("🩹", "Medic", f"brought it back to green {comebacks}×"))
+    streak = best = 0
+    for r in week:
+        streak = streak + 1 if r.get("ok") else 0
+        best = max(best, streak)
+    if best >= 10 and best == len(week):
+        found.append(("🧱", "Unbreakable", f"{best} runs, not one red"))
+    grew = week[-1].get("n", 0) - week[0].get("n", 0)
+    if grew >= 5:
+        found.append(("🌱", "Test Farmer", f"+{grew} tests since the week began"))
+    elif grew <= -5:
+        found.append(("🧹", "Marie Kondo", f"{-grew} tests that sparked no joy, gone"))
+    greens = [r["d"] for r in week if r.get("ok") and "d" in r]
+    greens_before = [r["d"] for r in before if r.get("ok") and "d" in r]
+    if len(greens) >= 3 and len(greens_before) >= 3:
+        now_d, then_d = statistics.median(greens), statistics.median(greens_before)
+        if then_d > 0 and now_d <= then_d * 0.8:
+            found.append(("🐇", "Speed Demon", f"green runs {1 - now_d / then_d:.0%} faster than the week before"))
+        elif now_d > 0 and now_d >= then_d * 1.25:
+            found.append(("🐢", "Slowpoke", f"green runs {now_d / then_d - 1:.0%} slower than the week before"))
+    weekend = sum(1 for t in when if t.tm_wday >= 5)
+    if weekend >= 5:
+        found.append(("🌴", "Weekend Warrior", f"{weekend} runs on a Saturday or Sunday"))
+    red = sum(1 for r in week if not r.get("ok"))
+    if len(week) >= 10 and red / len(week) > 0.5:
+        found.append(("🌋", "Agent of Chaos", f"{red / len(week):.0%} of the week's runs red"))
+    if not found:
+        found.append(("🧘", "Zen Master", f"{len(week)} runs, nothing dramatic"))
+    return found[:MAX_ROLES]
 
 
 def _row(icon: str, label: str, value: Text | str) -> Text:
@@ -114,6 +168,12 @@ def render_wrapped(history: History, project: str) -> render.GlowPanel | Text:
 
     if records:
         lines += [Text(""), Text("  records", style="bold dim"), *records]
+
+    week = roles(runs, time.time())
+    if week:
+        lines += [Text(""), Text("  this week", style="bold dim")]
+        for icon, role, why in week:
+            lines.append(Text.assemble(f"  {icon} ", (f"{role:<24}", "bold #facc15"), (why, "dim")))
 
     shame = []
     failing = [(sum(c in FAILING for c in t.get("o", "")), nodeid) for nodeid, t in tests.items()]

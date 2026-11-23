@@ -1545,7 +1545,7 @@ class GlowReporter(TerminalReporter):
             counts=Counter(self._counts),
             done=self._done,
             warnings=len(self.stats.get("warnings", [])),
-            prior_runs=history.runs,
+            prior_runs=history.runs[-30:],  # what "all green before" means for first blood
             green_streak=history.greens + 1 if ok else 0,
             new_pb=self._new_pb is not None,
             longest_fixed_streak=max(fixed_streaks, default=0),

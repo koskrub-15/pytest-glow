@@ -95,7 +95,8 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
   ENRAGED, below a tenth it makes its LAST STAND, and once slain it drops loot: sixteen items, common to
   legendary, to collect per project
 - `pytest --glow-wrapped`: your project's year-in-review. Runs, time spent, green rate, level, records, a hall
-  of shame (failed the most, flakiest, slowest), the hours you test at, loot and achievements. Runs no tests
+  of shame (failed the most, flakiest, slowest), who you were this week (🦉 Night Owl, 🔁 Rerun Goblin, 🩹 Medic,
+  🐇 Speed Demon…), the hours you test at, loot and achievements. Runs no tests
 - `--glow-share`: the run as an SVG card, ready to post
 - `--glow-sound`: 8-bit sounds, synthesized on the fly (nothing to license): a power-up at combo 10, 25, 50,
   100…, a slide down on a COMBO BREAKER, hits and crits on the boss, then a level-clear jingle, an air horn for

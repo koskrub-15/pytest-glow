@@ -9,7 +9,7 @@ import time
 from typing import Any
 
 KEY = "glow/history"
-MAX_RUNS = 30
+MAX_RUNS = 300  # a busy week of them, for the wrapped's roles
 MAX_OUTCOMES = 12
 MAX_DURATIONS = 10
 MAX_TESTS = 5000

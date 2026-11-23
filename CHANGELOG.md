@@ -17,6 +17,8 @@ All notable changes to this project are documented here. The format follows
 - `--glow-profile` keeps its numbers out of junitxml, and counts conftest fixtures as your code.
 - The tests that go online, and to which hosts: public addresses only, under xdist too.
 - Prestige: past Lv 50, back to Lv 1 with a ★ to show for it, in the XP line and the wrapped.
+- `--glow-wrapped`: who you were this week, from the runs of the last seven days (Night Owl, Medic, Speed Demon…).
+  Glow keeps 300 runs now, not 30.
 - The ghost of your personal best races the run, under the progress bar: ahead of it, or behind.
 - Fixed: the green streak stopped at 31.
 - Fixed: "faster than last run" compared with an older run of as many tests while saying "last run".

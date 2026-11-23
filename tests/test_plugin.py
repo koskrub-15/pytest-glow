@@ -699,6 +699,7 @@ def test_wrapped(pytester):
     assert "Lv 3 Assert Apprentice" in out and "420 XP" in out  # 3 × (13 passed + 25 green + 2 combo + 100 boss)
     assert re.search(r"longest green streak +3 runs", out)
     assert re.search(r"best combo +×13", out)
+    assert "this week" in out and re.search(r"🧘 Zen Master +3 runs, nothing dramatic", out)
     assert "test_wrapped.py::test_slow" in out
     assert "👹 3 won · 0 lost" in out
     assert "collected" not in out  # nothing ran: no verdict
