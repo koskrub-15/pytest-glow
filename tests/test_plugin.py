@@ -1005,7 +1005,8 @@ def test_glow_profile_summary(pytester):
     _profiled_project(pytester)
     _, out = run(pytester, "--glow", "--glow-profile")
     assert re.search(r"where \S+ in tests went", out)
-    assert re.search(r"in fixtures: your code \d+ms", out)
+    if sys.platform != "darwin":  # a 200ms fixture can get no sample at all there
+        assert re.search(r"in fixtures: your code \d+ms", out)
 
 
 @_COARSE
