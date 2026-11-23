@@ -36,7 +36,7 @@ from .blame import ago, blame, changed_since, commits_since, describe, head
 from .boss import HEARTS, Fight, arena, drop, loot_line, outcome
 from .history import History, is_flaky
 from .order import GROUPS
-from .plugin import AFFECTED, ORDERED, flag
+from .plugin import AFFECTED, ORDERED, flag, partial_run
 
 SUMMARY_EXIT_CODES = (
     pytest.ExitCode.OK,
@@ -212,6 +212,7 @@ class GlowReporter(TerminalReporter):
         self._collect_spinner = Spinner("dots", style="magenta")
         self._history = History(getattr(config, "cache", None))
         self._coverage: cov.CoverageResult | None = None
+        self._partial: str | None = None  # --glow-affected ran only part of the suite: how much
         started = time.localtime()
         self._hour, self._weekday = started.tm_hour, started.tm_wday
         self._combo = 0
@@ -871,12 +872,19 @@ class GlowReporter(TerminalReporter):
             self._print_failures()
             self._print_warnings()
         self._coverage = cov.collect(self.config)
-        if self._coverage is None:
+        self._partial = partial_run(self.config)
+        measured_part = self._coverage is not None and self._partial is not None
+        if measured_part:  # of the tests that ran, not of the project: not worth a number
+            self._coverage = None
+        elif self._coverage is None:
             for content in self._suppressed:
                 self._print(Text(content.strip(), style="bold red"))
         if exitstatus in SUMMARY_EXIT_CODES:
             self.config.hook.pytest_terminal_summary(terminalreporter=self, exitstatus=exitstatus, config=self.config)
         self._print_coverage()
+        if measured_part:
+            self._print()
+            self._print(Text(f"  ☂ coverage: not counted, {self._partial} (--glow-affected)", style="dim"))
         get_max = getattr(self, "_get_max_warnings", None)
         max_warnings = get_max() if get_max else None
         if max_warnings is not None and session.exitstatus == pytest.ExitCode.OK:

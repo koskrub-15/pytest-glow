@@ -172,3 +172,21 @@ def test_affected_leaves_coverage_tools_alone():
         assert sys.monitoring.get_tool(tracker.tool) == "pytest-glow"
         tracker.stop()
         assert sys.monitoring.get_tool(affected.TOOL_IDS[0]) is None
+
+
+@needs_monitoring
+def test_affected_doesnt_count_the_coverage_of_a_part(pytester):
+    pytest.importorskip("pytest_cov")
+    pytester.makepyfile(**PROJECT)
+
+    def run(*args):
+        result = pytester.runpytest_subprocess("--glow", "--glow-affected", "--cov=.", "--cov-fail-under=95", *args)
+        return result.ret, re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", result.stdout.str())
+
+    code, out = run()
+    assert "covered" in out  # all of them ran: the coverage is the suite's
+    code, out = run()
+    assert "coverage: not counted, no test ran" in out and "covered" not in out and code == 0
+    edit(pytester, "tax")
+    code, out = run()
+    assert "coverage: not counted, only 1 of 4 tests ran" in out and code == 0  # not below 95% for it

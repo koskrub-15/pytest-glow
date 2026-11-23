@@ -20,6 +20,7 @@ All notable changes to this project are documented here. The format follows
 - `--glow-wrapped`: who you were this week, from the runs of the last seven days (Night Owl, Medic, Speed Demon…).
   Glow keeps 300 runs now, not 30.
 - The ghost of your personal best races the run, under the progress bar: ahead of it, or behind.
+- `--glow-affected` doesn't show, keep or fail `--cov-fail-under` on the coverage of the part of the suite it ran.
 - Fixed: the green streak stopped at 31.
 - Fixed: "faster than last run" compared with an older run of as many tests while saying "last run".
 

@@ -55,7 +55,8 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
   (apps/services/month.py)`; nothing changed, nothing runs, and that's a pass. When no test runs code from a
   changed file (a module of constants), it can't tell who uses it and runs everything; a changed `conftest.py`
   runs the tests under it. Python files only: a changed JSON fixture isn't noticed. Python 3.12+ (it uses
-  `sys.monitoring`, about 1% slower); works under xdist and with `--no-glow`
+  `sys.monitoring`, about 1% slower); works under xdist and with `--no-glow`. When it leaves tests out, coverage
+  isn't counted (it would be that of the part that ran) and `--cov-fail-under` doesn't fail the run
 - `--glow-rerun[=N]`: a failed test runs again, up to N times. One that then passes is called out as flaky with
   how it failed the first time, and the run is GREEN, BUT FLAKY rather than red. Works under xdist and in CI
 
