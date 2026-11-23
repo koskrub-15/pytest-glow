@@ -25,6 +25,11 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
   that's down is one failure with "+39 more like this", not forty tracebacks
 - warnings grouped by message, the slowest tests, a short list of what failed
 - the slowest fixtures, with setup and teardown apart, per call, and their share of the run
+- with `--glow-profile`, where the time goes: under each slow test `↳ test 12% · your code 61% · libs 27%
+  (sqlalchemy)`, and for the whole run fixtures, tests, your code and libraries on one bar, with the
+  libraries that take the most (`in fixtures: argon2 5.40s`). It samples the stack every 5 ms, so it costs
+  about nothing; time in C code (a `sleep`, a socket, numpy) counts for the Python code that called it.
+  On macOS it gets a look in only every ~45 ms, so a test needs half a second or so for a breakdown of its own
 - paths you can click: tests, files and failures open in the editor (VS Code's terminal opens at the line)
 - a verdict panel with the counts and a proportional bar
 - the command to rerun just the failures (`pytest --lf` when there are many)
@@ -112,6 +117,7 @@ Just run `pytest`. Everything else is optional:
 | `--glow-boss` or `PYTEST_GLOW_BOSS=1` | fight the suite as a boss; `glow_boss = true` in the ini to keep it on |
 | `--glow-sound` or `PYTEST_GLOW_SOUND=1` | 8-bit sounds for combos, the boss and the end of the run (terminal only); `glow_sound = true` in the ini |
 | `--glow-share[=PATH]` | save the run as an SVG card, `glow-card.svg` by default |
+| `--glow-profile` or `PYTEST_GLOW_PROFILE=1` | split test time into the test, your code, libraries and fixtures; `glow_profile = true` in the ini |
 | `--glow-watch` | rerun on every save, failures and changed tests first; `f`, `p`, `d`, enter and `q` while it waits |
 | `--glow-ff` or `PYTEST_GLOW_FF=1` | run the likely failures first; `glow_ff = true` in the ini |
 | `--glow-rerun[=N]` or `PYTEST_GLOW_RERUN=N` | rerun a failed test up to N times (1 by default) and call out flaky ones; `glow_rerun = N` in the ini |

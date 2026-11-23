@@ -1,4 +1,5 @@
 import re
+import sys
 
 import pytest
 
@@ -913,3 +914,74 @@ def test_quests_can_be_turned_off(pytester):
     pytester.makepyfile("def test_a(): pass\n")
     _, out = run(pytester, "--glow")
     assert "📜" not in out
+
+
+_BUSY = (
+    "import time\n"
+    "def busy(seconds):\n"
+    "    end = time.perf_counter() + seconds\n"
+    "    while time.perf_counter() < end:\n"
+    "        pass\n"
+)
+
+
+def _profiled_project(pytester):
+    pytester.makepyfile(
+        shop=_BUSY,
+        test_slow=(
+            "import time, pytest\nfrom shop import busy\n"
+            "@pytest.fixture\ndef warm():\n    busy(0.2)\n"
+            "def test_slow(warm):\n    busy(0.4)\n"
+            "    end = time.perf_counter() + 0.1\n    while time.perf_counter() < end:\n        pass\n"
+        ),
+    )
+
+
+# macOS wakes a waiting thread next to a busy one only every ~45ms (Linux: 10ms), so a test this short gets
+# too few samples there for a breakdown of its own
+_COARSE = pytest.mark.skipif(sys.platform == "darwin", reason="too few samples of a short test on macOS")
+
+
+@_COARSE
+def test_glow_profile(pytester):
+    _profiled_project(pytester)
+    _, out = run(pytester, "--glow", "--glow-profile")
+    # a few samples can land in the stdlib (contextlib, around the fixture): "libs 1% (contextlib)" in between
+    found = re.search(r"↳ test (\d+)% · your code (\d+)% ·(?: libs \d+% \(\w+\) ·)?\s+fixtures (\d+)%", out)
+    assert found, out
+    test, code, fixtures = map(int, found.groups())
+    assert re.search(r"\d+ms  ━{12}  test_slow\.py::test_slow", out), out  # the time and bar aren't squeezed
+    assert 5 <= test <= 30 and 45 <= code <= 75 and 15 <= fixtures <= 45
+    assert re.search(r"where \S+ in tests went", out)
+    assert re.search(r"in fixtures: your code \d+ms", out)
+
+
+def test_glow_profile_summary(pytester):
+    _profiled_project(pytester)
+    _, out = run(pytester, "--glow", "--glow-profile")
+    assert re.search(r"where \S+ in tests went", out)
+    assert re.search(r"in fixtures: your code \d+ms", out)
+
+
+@_COARSE
+def test_glow_profile_under_xdist(pytester):
+    pytest.importorskip("xdist")
+    _profiled_project(pytester)
+    _, out = run(pytester, "--glow", "--glow-profile", "-n", "2")
+    assert re.search(r"↳ test \d+% · your code \d+%", out)
+
+
+def test_no_profile_unless_asked(pytester):
+    _profiled_project(pytester)
+    _, out = run(pytester, "--glow")
+    assert "in tests went" not in out and "↳ test" not in out
+
+
+def test_pace_compares_with_a_run_of_as_many_tests(pytester):
+    pytester.makepyfile(test_p="import pytest\n@pytest.mark.parametrize('i', range(3))\ndef test_p(i): pass\n")
+    run(pytester, "--glow")
+    _, out = run(pytester, "--glow")
+    assert re.search(r"(same pace as|faster than|slower than) last run", out)
+    run(pytester, "--glow", "-k", "0")
+    _, out = run(pytester, "--glow")
+    assert re.search(r"(same pace as|faster than|slower than) the last run of 3 tests", out)

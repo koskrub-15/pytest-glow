@@ -72,6 +72,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "(also PYTEST_GLOW_RERUN=N or glow_rerun = N in the ini)",
     )
     group.addoption(
+        "--glow-profile",
+        action="store_true",
+        default=None,
+        help="split each test's time into the test itself, your code and libraries, by sampling "
+        "(also PYTEST_GLOW_PROFILE=1 or glow_profile = true in the ini)",
+    )
+    group.addoption(
         "--glow-watch",
         action="store_true",
         default=False,
@@ -86,6 +93,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addini("glow_summary", "on GitHub Actions, write a job summary of the run", type="bool", default=True)
     parser.addini("glow_ff", "run the likely failures first", type="bool", default=False)
     parser.addini("glow_rerun", "run a failed test again, up to this many times", default="")
+    parser.addini(
+        "glow_profile", "split each test's time into the test, your code and libraries", type="bool", default=False
+    )
     parser.addini("glow_boss", "fight the test suite as a boss", type="bool", default=False)
     parser.addini("glow_sound", "play a sound when the run ends", type="bool", default=False)
 
@@ -211,6 +221,10 @@ def pytest_configure(config: pytest.Config) -> None:
     from . import rerun, summary
 
     config.stash[RERUNS] = rerun.reruns(config)
+    if flag(config, "profile"):
+        from .profile import Profiler
+
+        config.pluginmanager.register(Profiler(config), "glow-profile")
     path = summary.wanted(config)
     if path:
         config.pluginmanager.register(summary.JobSummary(config, path), "glow-summary")

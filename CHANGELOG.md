@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+- `--glow-profile`: where a test's time goes, the test itself, your code, libraries or fixtures, by sampling
+  its stack; per slow test and for the whole run, with the libraries that take the most.
+- Fixed: the green streak stopped at 31.
+- Fixed: "faster than last run" compared with an older run of as many tests while saying "last run".
+
 ## [0.5.0] - 2026-11-21
 
 - Under each failure, what its history says: red for how many runs, the same failure or a new one, and when
