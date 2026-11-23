@@ -65,6 +65,8 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
 
 **Pure showing off** (all of it remembered in `.pytest_cache` too)
 - personal bests: the fastest green run for a given number of tests, `🏆 new PB` when you beat it
+- the ghost of your personal best races the run: under the progress bar, a 👻 where the best run was by now,
+  and `▲ 0.5s ahead` or `▼ 1.2s behind` (for suites that take 3 seconds or more)
 - achievements, each unlocked once per project: First Blood, Phoenix, Night Owl, Minimalist, Sniper,
   Speedrunner, Surgeon, Clean Sweep, Centurion, Friday Deploy, Archaeologist, Glass Cannon, Unstoppable,
   Boss Slayer, Shiny Hunter

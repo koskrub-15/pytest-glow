@@ -579,3 +579,31 @@ def test_profile_classifies_frames(tmp_path):
     assert sampler.classify(code_at("<frozen importlib._bootstrap>")) == ("lib", "imports")
     assert sampler.classify(code_at(os.path.join("x", "_pytest", "runner.py"))) is None
     assert profile.split(2.0, {"test": 1, "code": 3, "lib": 0}) == {"test": 0.5, "code": 1.5, "lib": 0.0}
+
+
+def test_ghost_bar_puts_the_ghost_where_the_best_run_was():
+    from rich.console import Console
+
+    console = Console(width=22, color_system=None)
+    with console.capture() as cap:
+        console.print(render.GhostBar(5, 10))
+    assert cap.get().rstrip("\n") == "╌" * 10 + "👻" + " " * 10
+    with console.capture() as cap:
+        console.print(render.GhostBar(30, 10))  # the best run is done: the ghost waits at the end
+    assert cap.get().rstrip() == "╌" * 20 + "👻"
+
+
+def test_ghost_race():
+    from types import SimpleNamespace
+
+    from pytest_glow.reporter import GlowReporter
+
+    def race(done, since, best=10.0, total=100):
+        run = SimpleNamespace(_ghost=best, _t_start=0.0, _done=done, _total=total)
+        row = GlowReporter._ghost_row(run, since, total)
+        return row[-1].plain if row else None
+
+    assert race(done=60, since=5.0) == "▲ 1.0s ahead"  # the best got to 60 at 6s
+    assert race(done=40, since=5.0) == "▼ 1.0s behind"
+    assert race(done=1, since=0.5) is None  # too early to tell
+    assert race(done=60, since=5.0, best=None) is None

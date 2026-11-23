@@ -383,6 +383,28 @@ class GlowBar:
         yield glow_bar(self.completed, self.total, options.max_width, self.stops, self.now)
 
 
+class GhostBar:
+    """Where the personal best run was at this point: a faint trail, and the ghost at its head."""
+
+    def __init__(self, completed: float, total: float) -> None:
+        self.completed, self.total = completed, total
+
+    def __rich_measure__(self, console, options):
+        from rich.measure import Measurement
+
+        return Measurement(4, options.max_width)
+
+    def __rich_console__(self, console, options):
+        width = max(options.max_width, 3)
+        at = round((width - 2) * min(max(self.completed / self.total, 0.0), 1.0)) if self.total else 0
+        trail = Text()
+        for i in range(at):
+            trail.append("╌", style=blend(_TRACK, "#9ca3af", i / max(width - 3, 1)))
+        trail.append("👻")
+        trail.append(" " * (width - at - 2))
+        yield trail
+
+
 def fade_rule(title: str, stops: tuple[str, ...], width: int) -> Text:
     """A section heading: a gradient title and a line that fades into the background."""
     head = Text("▍", style=stops[0]) + gradient_text(f" {title} ", stops)

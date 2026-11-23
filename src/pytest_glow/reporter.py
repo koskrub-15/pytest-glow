@@ -58,6 +58,7 @@ MAX_RERUN_IDS = 3  # beyond this, the rerun hint is `pytest --lf`
 SHINY_ODDS = 1 / 500  # the chance that a green run comes out shiny
 MIN_SAMPLES = 10  # fewer samples of a test than this, and its shares are noise
 PROFILE_STYLES = {"fixtures": "#6b7280", "test": "#22d3ee", "code": "#e879f9", "lib": "#facc15"}
+GHOST_MIN = 3.0  # seconds a personal best has to take for its ghost to race this run
 SLOWER = 2.0  # a test this many times its usual duration (and 100ms more) is called out
 
 
@@ -200,6 +201,7 @@ class GlowReporter(TerminalReporter):
         self._total = 0
         self._done = 0
         self._planned = False
+        self._ghost: float | None = None  # the personal best for as many tests, when it races this run
         self._announced = False
         self._t_start = time.monotonic()
         self._t_run: float | None = None
@@ -419,6 +421,8 @@ class GlowReporter(TerminalReporter):
             for path, n in per_file.items():
                 self._files[path] = FileState(path, n)
             self._total = len(nodeids)
+            best = self._history.personal_best(self._total) if self._history.enabled else None
+            self._ghost = best if best is not None and best >= GHOST_MIN else None
             self._path_width = min(max((len(p) for p in per_file), default=10), 48)
 
     def _announce_plan(self) -> None:
@@ -745,6 +749,9 @@ class GlowReporter(TerminalReporter):
                 Text("⏱ " + render.fmt_clock(elapsed), style="dim"),
                 Text("eta " + (render.fmt_clock(eta) if eta is not None else "…"), style="dim"),
             )
+            ghost = self._ghost_row(now, total)
+            if ghost is not None:
+                overall.add_row(*ghost)
             if self._fight is not None:
                 self._fight.hp = total
                 parts += [Text(""), arena(self._fight, total - self._hits(), failing, now, self._last_hit, self._combo)]
@@ -755,6 +762,26 @@ class GlowReporter(TerminalReporter):
             if self._status and self._verbose > 0:
                 parts.append(Text(self._status, style="dim"))
             return Group(*parts)
+
+    def _ghost_row(self, now: float, total: float) -> list | None:
+        """The personal best, racing this run: where it was by now, and how far ahead of it, or behind, this run is."""
+        best = self._ghost
+        since = now - self._t_start  # the best is timed from the session's start too
+        if best is None or since < 1.0 or self._total != total:
+            return None
+        lead = best * self._done / total - since  # when the best got as far as this run is now, less now
+        if lead >= 0:
+            race = Text(f"▲ {render.fmt_clock(lead)} ahead", style="bold green")
+        else:
+            race = Text(f"▼ {render.fmt_clock(-lead)} behind", style="red")
+        return [
+            "",
+            render.GhostBar(since / best * total, total),
+            Text("PB", style="dim"),
+            "",
+            Text("⏱ " + render.fmt_clock(best), style="dim"),
+            race,
+        ]
 
     # -- debugging --------------------------------------------------------------------
 
