@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{project}} · glow graph</title>
+<style>
+  :root {
+    --bg: #1b1b1f; --panel: #232329ee; --line: #ffffff14; --text: #dcddde; --dim: #8a8f98;
+    --file: #a78bfa; --testfile: #22d3ee; --conftest: #f472b6;
+    --passed: #4ade80; --failing: #f87171; --flaky: #fbbf24; --skipped: #94a3b8; --unknown: #64748b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+    font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  canvas { display: block; width: 100vw; height: 100vh; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+  .bar { position: fixed; top: 12px; left: 12px; right: 12px; display: flex; gap: 10px; align-items: center;
+    flex-wrap: wrap; pointer-events: none; }
+  .bar > * { pointer-events: auto; }
+  .title { font-weight: 700; letter-spacing: .02em;
+    background: linear-gradient(90deg, #22d3ee, #a78bfa, #f472b6); -webkit-background-clip: text; color: transparent; }
+  .stats { color: var(--dim); }
+  input, button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid #ffffff1f;
+    border-radius: 8px; padding: 6px 10px; outline: none; }
+  input { width: 220px; max-width: 100%; }
+  input:focus { border-color: var(--file); }
+  button { cursor: pointer; }
+  button[aria-pressed="true"] { border-color: var(--file); color: #fff; }
+  .legend { position: fixed; left: 12px; bottom: 12px; display: flex; gap: 12px; flex-wrap: wrap; color: var(--dim);
+    background: var(--panel); padding: 8px 12px; border-radius: 10px; max-width: calc(100vw - 24px); }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
+  .panel { position: fixed; top: 60px; right: 12px; width: 340px; max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 120px); overflow: auto; background: var(--panel); border: 1px solid #ffffff14;
+    border-radius: 12px; padding: 14px 16px; display: none; backdrop-filter: blur(8px); }
+  .panel.open { display: block; }
+  .panel h2 { margin: 0 0 4px; font-size: 14px; word-break: break-all; }
+  .panel .big { font-size: 22px; font-weight: 700; }
+  .panel ul { list-style: none; padding: 0; margin: 8px 0 0; }
+  .panel li { padding: 3px 0; word-break: break-all; color: var(--dim); cursor: pointer; }
+  .panel li:hover { color: var(--text); }
+  .panel li b { color: var(--text); font-weight: 500; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .note { color: var(--dim); margin-top: 10px; }
+  .empty { position: fixed; inset: 0; display: grid; place-items: center; color: var(--dim); text-align: center; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="bar">
+  <span class="title">✦ glow graph</span><span class="stats" id="stats"></span>
+  <input id="q" placeholder="find a test or a file…" autocomplete="off">
+  <button id="group" aria-pressed="false" title="one node per test file">group tests</button>
+</div>
+<div class="legend" id="legend"></div>
+<div class="panel" id="panel"></div>
+<script>
+const DATA = /*DATA*/null;
+const css = getComputedStyle(document.documentElement);
+const C = k => css.getPropertyValue("--" + k).trim();
+const canvas = document.getElementById("c"), ctx = canvas.getContext("2d");
+const panel = document.getElementById("panel");
+let W = 0, H = 0, dpr = 1;
+let view = { x: 0, y: 0, k: 1 };
+let nodes = [], links = [], adj = [];
+let hover = null, picked = null, query = "", grouped = DATA.tests.length > 600;
+let alpha = 1, dragging = null, panning = null, moved = false;
+
+const isTestFile = p => /(^|\/)(test_[^/]*|[^/]*_test)\.py$/.test(p);
+const isConftest = p => /(^|\/)conftest\.py$/.test(p);
+const base = p => p.split("/").pop();
+const testName = id => id.split("::").slice(1).join("::") || id;
+
+function fileKind(p) { return isConftest(p) ? "conftest" : isTestFile(p) ? "testfile" : "file"; }
+
+function build() {
+  nodes = []; links = [];
+  const names = {};
+  for (const p of DATA.files) names[base(p)] = (names[base(p)] || 0) + 1;
+  const label = p => names[base(p)] > 1 ? p.split("/").slice(-2).join("/") : base(p);  // two user.py: which
+  const fileNode = DATA.files.map(p => ({ kind: fileKind(p), id: p, label: label(p), tests: new Set() }));
+  const testNode = [];
+  if (grouped) {
+    for (const [ti, fi] of DATA.links) {
+      const t = DATA.tests[ti], own = t.id.split("::")[0];
+      if (DATA.files[fi] !== own) fileNode[fi].tests.add(ti);
+      fileNode[DATA.files.indexOf(own)].tests.add(ti);
+    }
+    const seen = new Set();
+    for (const [ti, fi] of DATA.links) {
+      const own = DATA.files.indexOf(DATA.tests[ti].id.split("::")[0]);
+      if (own === fi) continue;
+      const key = own + ":" + fi;
+      if (!seen.has(key)) { seen.add(key); links.push([own, fi, .5]); }
+    }
+    nodes = fileNode;
+  } else {
+    for (const t of DATA.tests) testNode.push({ kind: "test", id: t.id, label: testName(t.id), t, tests: new Set() });
+    for (const [ti, fi] of DATA.links) fileNode[fi].tests.add(ti);
+    nodes = [...fileNode, ...testNode];
+    for (const [ti, fi] of DATA.links) {
+      const own = DATA.files[fi] === DATA.tests[ti].id.split("::")[0];
+      links.push([fileNode.length + ti, fi, own ? 1 : .15]);
+    }
+  }
+  nodes.forEach((n, i) => {
+    n.r = n.kind === "test" ? 3.2 : 4 + Math.sqrt(n.tests.size) * 1.6;
+    const a = i * 2.399963, d = 12 * Math.sqrt(i + 1);  // a sunflower to start from
+    n.x = Math.cos(a) * d; n.y = Math.sin(a) * d; n.vx = n.vy = 0;
+  });
+  adj = nodes.map(() => new Set());
+  for (const [a, b] of links) { adj[a].add(b); adj[b].add(a); }
+  alpha = 1; picked = null; panel.classList.remove("open");
+  stats();
+}
+
+function color(n) {
+  if (n.kind === "test") return C(n.t.s);
+  if (n.kind === "file") {
+    const failing = [...n.tests].some(ti => DATA.tests[ti].s === "failing");
+    return failing && grouped ? C("failing") : C(n.kind);
+  }
+  if (grouped) {
+    const st = [...n.tests].map(ti => DATA.tests[ti].s);
+    if (st.includes("failing")) return C("failing");
+    if (st.includes("flaky")) return C("flaky");
+  }
+  return C(n.kind);
+}
+
+function stats() {
+  const src = DATA.files.filter(p => fileKind(p) === "file").length;
+  let top = null;
+  nodes.forEach(n => { if (n.kind === "file" && (!top || n.tests.size > top.tests.size)) top = n; });
+  let s = `${DATA.tests.length} tests · ${src} files · ${links.length} links`;
+  if (top && DATA.mapped) s += ` · hub: ${top.label} (${top.tests.size} tests)`;
+  if (DATA.more) s += ` · +${DATA.more} tests not drawn`;
+  document.getElementById("stats").textContent = s;
+}
+
+function tick() {
+  const n = nodes.length, cell = 140, grid = new Map();
+  for (let i = 0; i < n; i++) {
+    const p = nodes[i], key = Math.floor(p.x / cell) + "," + Math.floor(p.y / cell);
+    (grid.get(key) || grid.set(key, []).get(key)).push(i);
+  }
+  for (let i = 0; i < n; i++) {  // push apart what's close, by grid cells: no n² for a big suite
+    const p = nodes[i], gx = Math.floor(p.x / cell), gy = Math.floor(p.y / cell);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+      const bucket = grid.get((gx + dx) + "," + (gy + dy));
+      if (!bucket) continue;
+      for (const j of bucket) {
+        if (j <= i) continue;
+        const q = nodes[j];
+        let x = q.x - p.x, y = q.y - p.y, d2 = x * x + y * y;
+        if (d2 > cell * cell) continue;
+        if (d2 < 0.01) { x = Math.random() - .5; y = Math.random() - .5; d2 = .5; }
+        const f = 700 * alpha * Math.sqrt(p.r * q.r) / 4 / d2, min = p.r + q.r + 6;
+        const push = d2 < min * min ? f + (min - Math.sqrt(d2)) * .3 : f;
+        p.vx -= x * push * .02; p.vy -= y * push * .02; q.vx += x * push * .02; q.vy += y * push * .02;
+      }
+    }
+  }
+  for (const [a, b, w] of links) {
+    const p = nodes[a], q = nodes[b];
+    const x = q.x - p.x, y = q.y - p.y, d = Math.sqrt(x * x + y * y) || 1;
+    const rest = (w >= 1 ? 18 : 70) + p.r + q.r, k = .06 * w * alpha / Math.sqrt(Math.min(adj[a].size, adj[b].size) || 1);
+    const f = (d - rest) / d * k;
+    p.vx += x * f; p.vy += y * f; q.vx -= x * f; q.vy -= y * f;
+  }
+  for (const p of nodes) {
+    p.vx -= p.x * .004 * alpha; p.vy -= p.y * .004 * alpha;
+    if (p === dragging) { p.vx = p.vy = 0; continue; }
+    p.vx *= .6; p.vy *= .6; p.x += p.vx; p.y += p.vy;
+  }
+  alpha = Math.max(alpha * .99, dragging ? .3 : 0);
+}
+
+function lit() {  // what's in focus: the hovered or picked node and its neighbours, or what matches the search
+  const focus = hover ?? picked;
+  if (focus !== null) return new Set([focus, ...adj[focus]]);
+  if (query) {
+    const s = new Set();
+    nodes.forEach((n, i) => { if (n.id.toLowerCase().includes(query)) { s.add(i); } });
+    return s;
+  }
+  return null;
+}
+
+function draw() {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = C("bg"); ctx.fillRect(0, 0, W, H);
+  ctx.setTransform(dpr * view.k, 0, 0, dpr * view.k, dpr * (W / 2 + view.x), dpr * (H / 2 + view.y));
+  const on = lit(), focus = hover ?? picked;
+  ctx.lineWidth = 1 / view.k;
+  ctx.strokeStyle = on ? "#ffffff08" : C("line");
+  ctx.beginPath();
+  for (const [a, b] of links) {
+    if (on && (a === focus || b === focus)) continue;
+    ctx.moveTo(nodes[a].x, nodes[a].y); ctx.lineTo(nodes[b].x, nodes[b].y);
+  }
+  ctx.stroke();
+  if (focus !== null) {
+    ctx.strokeStyle = color(nodes[focus]); ctx.lineWidth = 1.6 / view.k; ctx.globalAlpha = .75;
+    ctx.beginPath();
+    for (const b of adj[focus]) { ctx.moveTo(nodes[focus].x, nodes[focus].y); ctx.lineTo(nodes[b].x, nodes[b].y); }
+    ctx.stroke(); ctx.globalAlpha = 1;
+  }
+  nodes.forEach((n, i) => {
+    const bright = !on || on.has(i);
+    ctx.globalAlpha = bright ? 1 : .12;
+    ctx.fillStyle = color(n);
+    if (bright && on && i === focus) { ctx.shadowColor = color(n); ctx.shadowBlur = 18; }
+    ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+  });
+  ctx.globalAlpha = 1;
+  ctx.font = `${12 / view.k}px ui-sans-serif, system-ui, sans-serif`;
+  ctx.textAlign = "center";
+  const taken = [], order = nodes.map((n, i) => i).sort((a, b) => (b === focus) - (a === focus) || nodes[b].r - nodes[a].r);
+  for (const i of order) {  // the biggest first, and none written over another
+    const n = nodes[i];
+    if (on ? !on.has(i) : n.r * view.k < 6 && view.k < 2.2) continue;
+    const w = ctx.measureText(n.label).width, h = 14 / view.k, x = n.x - w / 2, y = n.y + n.r + 2 / view.k;
+    if (taken.some(t => x < t.x + t.w && t.x < x + w && y < t.y + t.h && t.y < y + h)) continue;
+    taken.push({ x, y, w, h });
+    ctx.fillStyle = on && i !== focus ? C("dim") : C("text");
+    ctx.fillText(n.label, n.x, y + 11 / view.k);
+  }
+}
+
+function frame() {
+  if (alpha > .002 || dragging) tick();
+  draw();
+  requestAnimationFrame(frame);
+}
+
+function resize() {
+  dpr = window.devicePixelRatio || 1; W = innerWidth; H = innerHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+}
+
+function toWorld(e) { return { x: (e.clientX - W / 2 - view.x) / view.k, y: (e.clientY - H / 2 - view.y) / view.k }; }
+
+function at(e) {
+  const p = toWorld(e);
+  let best = null, bd = Infinity;
+  nodes.forEach((n, i) => {
+    const d = Math.hypot(n.x - p.x, n.y - p.y);
+    if (d < Math.max(n.r, 6 / view.k) && d < bd) { best = i; bd = d; }
+  });
+  return best;
+}
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const fmt = s => s == null ? "" : s < 1 ? Math.round(s * 1000) + "ms" : s.toFixed(2) + "s";
+const trail = o => [...o].map(c => `<span style="color:${C(
+  ({ P: "passed", F: "failing", E: "failing", S: "skipped", x: "skipped", X: "passed" })[c] || "unknown")}">●</span>`).join("");
+
+function show(i) {
+  picked = i;
+  if (i === null) { panel.classList.remove("open"); return; }
+  const n = nodes[i];
+  const item = j => `<li data-i="${j}"><span class="dot" style="background:${color(nodes[j])}"></span>${esc(nodes[j].kind === "test" ? nodes[j].id : nodes[j].id)}</li>`;
+  const near = [...adj[i]].sort((a, b) => nodes[b].tests.size - nodes[a].tests.size);
+  let body;
+  if (n.kind === "test") {
+    body = `<h2>${esc(n.label)}</h2><div class="note">${esc(n.id.split("::")[0])}</div>
+      <p>${trail(n.t.o)} ${esc(n.t.s)}${n.t.d != null ? " · " + fmt(n.t.d) : ""}</p>
+      <div class="note">runs code from ${near.length} file${near.length === 1 ? "" : "s"}</div><ul>${near.map(item).join("")}</ul>`;
+  } else {
+    const failing = [...n.tests].filter(ti => DATA.tests[ti].s === "failing").length;
+    const what = n.kind === "file" ? "edit it, and --glow-affected runs" : n.kind === "conftest" ? "tests under it" : "tests in it";
+    body = `<h2>${esc(n.id)}</h2><div class="note">${what}</div>
+      <div class="big">${n.tests.size} <span class="note">of ${DATA.tests.length} tests</span></div>
+      ${failing ? `<div style="color:${C("failing")}">${failing} failing</div>` : ""}
+      <ul>${near.slice(0, 300).map(item).join("")}</ul>`;
+  }
+  if (!DATA.mapped) body += `<div class="note">run the tests once with <b>--glow-affected</b> to see which files each one uses</div>`;
+  panel.innerHTML = body;
+  panel.classList.add("open");
+}
+
+panel.addEventListener("click", e => {
+  const li = e.target.closest("li[data-i]");
+  if (!li) return;
+  const j = +li.dataset.i;
+  view.x = -nodes[j].x * view.k; view.y = -nodes[j].y * view.k;
+  show(j);
+});
+
+canvas.addEventListener("pointerdown", e => {
+  canvas.setPointerCapture(e.pointerId); moved = false;
+  const i = at(e);
+  if (i !== null) { dragging = nodes[i]; alpha = Math.max(alpha, .3); }
+  else panning = { x: e.clientX - view.x, y: e.clientY - view.y };
+  canvas.classList.add("dragging");
+});
+canvas.addEventListener("pointermove", e => {
+  if (dragging) { const p = toWorld(e); dragging.x = p.x; dragging.y = p.y; moved = true; return; }
+  if (panning) { view.x = e.clientX - panning.x; view.y = e.clientY - panning.y; moved = true; return; }
+  hover = at(e);
+  canvas.style.cursor = hover !== null ? "pointer" : "grab";
+});
+canvas.addEventListener("pointerup", e => {
+  const i = at(e);
+  if (!moved) show(i === picked ? null : i);
+  dragging = panning = null; canvas.classList.remove("dragging");
+});
+canvas.addEventListener("pointerleave", () => { hover = null; });
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  const k = Math.min(8, Math.max(.1, view.k * Math.exp(-e.deltaY * .0015)));
+  const mx = e.clientX - W / 2, my = e.clientY - H / 2;
+  view.x = mx - (mx - view.x) * k / view.k; view.y = my - (my - view.y) * k / view.k; view.k = k;
+}, { passive: false });
+
+document.getElementById("q").addEventListener("input", e => { query = e.target.value.trim().toLowerCase(); });
+const groupButton = document.getElementById("group");
+groupButton.addEventListener("click", () => {
+  grouped = !grouped; groupButton.setAttribute("aria-pressed", grouped); build();
+});
+groupButton.setAttribute("aria-pressed", grouped);
+addEventListener("keydown", e => { if (e.key === "Escape") { show(null); document.getElementById("q").value = query = ""; } });
+addEventListener("resize", resize);
+
+document.getElementById("legend").innerHTML = [
+  ["file", "your code"], ["testfile", "test file"], ["conftest", "conftest"],
+  ["passed", "passing"], ["failing", "failing"], ["flaky", "flaky"], ["unknown", "no history"],
+].map(([k, label]) => `<span><i style="background:${C(k)}"></i>${label}</span>`).join("")
+  + `<span>· size: how many tests use it · click: what it touches · scroll: zoom</span>`;
+
+if (!DATA.tests.length) {
+  document.body.insertAdjacentHTML("beforeend",
+    `<div class="empty">no tests to draw yet<br>run them once with <b>--glow-affected</b>, then come back</div>`);
+}
+resize(); build();
+if (nodes.length) {  // settle a little before the first frame, then zoom to fit
+  for (let i = 0; i < 300; i++) tick();
+  const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y);
+  const w = Math.max(...xs) - Math.min(...xs) + 80, h = Math.max(...ys) - Math.min(...ys) + 80;
+  view.k = Math.min(2, Math.max(.15, Math.min(W / w, H / h)));
+  view.x = -(Math.max(...xs) + Math.min(...xs)) / 2 * view.k; view.y = -(Math.max(...ys) + Math.min(...ys)) / 2 * view.k;
+}
+frame();
+</script>
+</body>
+</html>

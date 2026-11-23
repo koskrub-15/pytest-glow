@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 
@@ -97,6 +98,14 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="show everything glow remembers about this project (with --glow-share, save it as SVG) and exit",
     )
+    group.addoption(
+        "--glow-graph",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PATH",
+        help="draw the tests and the files they use as a graph, in an HTML file (opened in the browser) and exit",
+    )
     parser.addini("glow_summary", "on GitHub Actions, write a job summary of the run", type="bool", default=True)
     parser.addini("glow_ff", "run the likely failures first", type="bool", default=False)
     parser.addini("glow_rerun", "run a failed test again, up to this many times", default="")
@@ -175,6 +184,9 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
             capture.stop_global_capturing()
         params = config.invocation_params
         return watch.main(params.args, str(params.dir), str(config.rootpath))
+    graph_path = config.getoption("glow_graph", None)
+    if graph_path is not None:
+        return _graph(config, graph_path or None)
     if not config.getoption("glow_wrapped", False):
         return None
     from _pytest.cacheprovider import Cache
@@ -193,6 +205,31 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
     if share:
         wrapped.save(recap, share)
         console.print(f"  ✦ saved {share}", style="dim", soft_wrap=True)
+    return 0
+
+
+def _graph(config: pytest.Config, path: str | None) -> int:
+    from rich.console import Console
+    from rich.text import Text
+
+    from . import graph
+
+    if path and not path.lower().endswith((".html", ".htm")):
+        raise pytest.UsageError(f"--glow-graph writes HTML; give it an .html path, not {path!r}")
+    out, data = graph.write(config, path)
+    console = Console(highlight=False)
+    line = Text.assemble(("  ✦ ", "magenta"), ("glow graph", "bold"), " ")
+    tests, files = len(data["tests"]), len(data["files"])
+    line.append(f"{tests} test{'s' * (tests != 1)} · {files} file{'s' * (files != 1)} · ", style="dim")
+    line.append(out, style=f"link file://{out}")
+    console.print(line, soft_wrap=True)
+    if not data["mapped"]:
+        console.print("  run the tests once with --glow-affected to see which files each one uses", style="dim")
+    if path is None and sys.stdout.isatty() and not os.environ.get("CI"):
+        import webbrowser
+
+        with contextlib.suppress(Exception):
+            webbrowser.open(f"file://{out}")
     return 0
 
 
