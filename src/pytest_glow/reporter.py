@@ -26,7 +26,7 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, advice, hang, net, progress, quests, render, rerun, share, sound
+from . import __version__, advice, chat, hang, net, pet, progress, quests, render, rerun, roast, share, sound
 from . import achievements as ach
 from . import affected as aff
 from . import coverage as cov
@@ -55,6 +55,7 @@ EASTER_EGGS = {69: "nice.", 67: "six seven 🤷"}
 MAX_WORKERS_SHOWN = 8
 COMBO_SHOWN = 10  # passes in a row before the live view starts counting a combo
 COMBO_BROKEN = 1.5  # seconds a broken combo stays on screen
+SKILL_ISSUE = 25  # a combo this long, broken, gets the stutter
 MAX_RERUN_IDS = 3  # beyond this, the rerun hint is `pytest --lf`
 SHINY_ODDS = 1 / 500  # the chance that a green run comes out shiny
 MIN_SAMPLES = 10  # fewer samples of a test than this, and its shares are noise
@@ -62,6 +63,7 @@ PROFILE_STYLES = {"fixtures": "#6b7280", "test": "#22d3ee", "code": "#e879f9", "
 NET_SHOWN = 4  # hosts listed under "tests go online"
 GHOST_MIN = 3.0  # seconds a personal best has to take for its ghost to race this run
 SLOWER = 2.0  # a test this many times its usual duration (and 100ms more) is called out
+SPLIT_MIN = 0.05  # seconds a file's best has to take before its splits mean more than noise
 
 
 @dataclass
@@ -155,6 +157,14 @@ def group_failures(failures: list) -> list[list]:
     for i, failure in enumerate(failures):
         groups.setdefault(_signature(failure.report, values=False) or i, []).append(failure)
     return list(groups.values())
+
+
+def split(secs: float, best: float | None) -> float | None:
+    """How far ahead of its best (below 0) or behind a file finished, when it's more than noise."""
+    if best is None or best < SPLIT_MIN:
+        return None
+    delta = secs - best
+    return delta if abs(delta) > max(0.02, best * 0.05) else None
 
 
 def _markup_style(markup: dict) -> str:
@@ -254,6 +264,15 @@ class GlowReporter(TerminalReporter):
         self._new_pb: float | None = None  # the record this run just beat
         self._unlocked: list[ach.Achievement] = []
         self._blamed_paths: set[str] = set()  # rootdir-relative files the failures point at
+        # speedrun splits: each file against its best, in a terminal only, where the times are yours
+        self._splits = self._live_enabled and self._history.enabled
+        self._roast = self._live_enabled and flag(config, "roast")
+        self._blames: dict[str, Any] = {}  # nodeid -> what git blame said of the line it failed on
+        self._chat = chat.Chat(config.rootpath.name) if self._live_enabled and flag(config, "chat") else None
+        self._live_width: int | None = None  # what the live view leaves the file lines, the chat beside them
+        # the pet, when one was adopted here: it lives on the runs you watch, never on CI's
+        self._pet = pet.load(str(config.rootpath)) if self._live_enabled else None
+        self._pet_events: list[str] = []
 
     # -- output plumbing ---------------------------------------------------------------
     # Other plugins (xdist, coverage, ...) write through the terminal reporter. While the
@@ -523,6 +542,8 @@ class GlowReporter(TerminalReporter):
         with self._lock:
             if self._t_run is None:
                 self._t_run = now
+                if self._chat is not None:
+                    self._chat.started(now, self._total)
             self._running[nodeid] = now
             self._locations[nodeid] = location
             fs = self._file(nodeid)
@@ -667,6 +688,14 @@ class GlowReporter(TerminalReporter):
                     broke = self._combo
                 self._combo = 0
             combo = self._combo
+            if self._chat is not None:
+                if ts.outcome == "passed":
+                    self._chat.passed(now, nodeid, combo)
+                elif ts.outcome in render.FAILING:
+                    told = next((self._crash(f) for f in reversed(self._failures) if f.report.nodeid == nodeid), "")
+                    self._chat.failed(now, nodeid, told, broke)
+                elif ts.outcome == "skipped":
+                    self._chat.skipped(now, nodeid)
             fs.counts[ts.outcome] += 1
             fs.duration += ts.duration
             fs.total = max(fs.total, fs.done)
@@ -696,7 +725,7 @@ class GlowReporter(TerminalReporter):
         elif outcome in render.FAILING and self._fight is not None:
             player.play("hurt")
         elif broke:
-            player.play("combo_breaker")
+            player.play("skill_issue" if broke >= SKILL_ISSUE else "combo_breaker")
         elif self._fight is not None:
             player.hit(crit=combo >= COMBO_SHOWN)
         if self._fight is not None:
@@ -735,7 +764,8 @@ class GlowReporter(TerminalReporter):
             icon = Text("◌", style="dim")
         else:
             icon = Text(render.glyph(cat), style=f"bold {render.style(cat)}")
-        width = max(10, min(40, self.console.width - self._path_width - 34))
+        room = (self._live_width or self.console.width) if live else self.console.width
+        width = max(10, min(40, room - self._path_width - 34))
         count = f"{fs.done}/{fs.total}" if live or fs.done < fs.total else str(fs.total)
         clock = render.fmt_clock(now - fs.started) if live else render.fmt_dur(fs.duration)
         line = Text.assemble(
@@ -752,7 +782,20 @@ class GlowReporter(TerminalReporter):
         if bad:
             line.append("  ")
             line.append_text(bad)
+        elif not live:
+            delta = self._split(fs)
+            if delta is not None and delta < 0:
+                line.append(f"  ▼{render.fmt_dur(-delta)} ", style="bold #facc15")
+                line.append_text(render.gradient_text("GOLD", ("#facc15", "#fb923c")))
+            elif delta is not None:
+                line.append(f"  ▲{render.fmt_dur(delta)}", style="red")
         return line
+
+    def _split(self, fs: FileState) -> float | None:
+        """The file against its best, all green and all of it run."""
+        if not self._splits or fs.done < fs.total or any(fs.counts[c] for c in render.FAILING):
+            return None
+        return split(fs.duration, self._history.split(fs.path, fs.total))
 
     # -- the live view ------------------------------------------------------------------
 
@@ -769,6 +812,8 @@ class GlowReporter(TerminalReporter):
 
             failing = sum(self._counts[c] for c in render.FAILING) + len(self._collect_errors)
             parts: list = []
+            beside = self._chat is not None and self.console.width >= chat.SIDE_FROM
+            self._live_width = self.console.width - chat.WIDTH - 1 if beside else None
 
             active = sorted(
                 (fs for fs in self._files.values() if fs.started is not None and not fs.flushed),
@@ -825,12 +870,32 @@ class GlowReporter(TerminalReporter):
                 self._fight.hp = total
                 parts += [Text(""), arena(self._fight, total - self._hits(), failing, now, self._last_hit, self._combo)]
             parts += [Text(""), overall]
+            broken = self._combo_broken
+            if broken is not None and now - broken[1] < render.GLITCH:
+                # the screen comes apart for a moment, a little less every frame
+                rnd = random.Random(int(now * 30))
+                amount = 0.12 * (1 - (now - broken[1]) / render.GLITCH)
+                parts = [
+                    render.glitch(p, amount, rnd)
+                    if isinstance(p, Text)
+                    else Padding(p, (0, 0, 0, rnd.choice((0, 1, 2))))
+                    for p in parts
+                ]
             combo = self._combo_line(now)
             if combo is not None:
                 parts.append(combo)
             if self._status and self._verbose > 0:
                 parts.append(Text(self._status, style="dim"))
-            return Group(*parts)
+            if self._chat is None:
+                return Group(*parts)
+            self._chat.tick(now, self._running)
+            if not beside:
+                return Group(*parts, self._chat.panel(4))
+            side = Table.grid(expand=True)
+            side.add_column(ratio=1)
+            side.add_column(width=chat.WIDTH)
+            side.add_row(Group(*parts), self._chat.panel(max(len(parts), chat.LINES) - 2))
+            return side
 
     def _ghost_row(self, now: float, total: float) -> list | None:
         """The personal best, racing this run: where it was by now, and how far ahead of it, or behind, this run is."""
@@ -944,6 +1009,15 @@ class GlowReporter(TerminalReporter):
             where = f" at {crash.path}:{crash.lineno}" if crash is not None else ""
             self._print(Text(f"  ◌ interrupted{where}", style="bold yellow"))
             self._keyboardinterrupt_memo = None
+        if self._pet is not None and self._done and exitstatus != pytest.ExitCode.INTERRUPTED:
+            ok = not self._failing() and exitstatus == pytest.ExitCode.OK
+            self._pet_events = pet.live(self._pet, ok, time.time())
+            pet.save(str(self.config.rootpath), self._pet)
+        if self._chat is not None and self._done and exitstatus != pytest.ExitCode.INTERRUPTED:
+            said = self._chat.finished(time.monotonic(), not self._failing() and exitstatus == pytest.ExitCode.OK)
+            line = Text.assemble("\n  💬 ", said.line())
+            line.append(f"   · peak {chat.viewers_text(self._chat.peak)} watching", style="dim")
+            self._print(line)
         self._print_verdict(session, exitstatus)
         self._save_history(exitstatus)
 
@@ -980,6 +1054,14 @@ class GlowReporter(TerminalReporter):
                 memory = self._memory(report)
                 if memory is not None:
                     self._print(Text.assemble(("  ↳ ", "dim"), (memory, "dim italic")))
+                if self._roast:
+                    burn = roast.roast(
+                        render.crash_message(report),
+                        summary=failure.diff.summary if failure.diff is not None else "",
+                        blame=self._blames.get(report.nodeid),
+                        outcomes=self._history.outcomes(report.nodeid),
+                    )
+                    self._print(Text.assemble(("  🔥 ", ""), (burn, "italic #fb923c")))
             if failure.traceback is not None:
                 render.shorten_paths(failure.traceback, str(self.config.invocation_params.dir))
                 self.console.print(failure.traceback)
@@ -1074,6 +1156,7 @@ class GlowReporter(TerminalReporter):
             found = blame(path, loc.lineno)
             if found is None:
                 return None
+            self._blames[report.nodeid] = found
             if found.when is not None:
                 age = time.time() - found.when
                 self._oldest_blame = max(age, self._oldest_blame or 0)
@@ -1483,6 +1566,8 @@ class GlowReporter(TerminalReporter):
 
     def _combo_line(self, now: float) -> Text | None:
         broken = self._combo_broken
+        if broken is not None and now - broken[1] < render.GLITCH:
+            return render.skill_issue(broken[0], now - broken[1])
         if broken is not None and now - broken[1] < COMBO_BROKEN and self._combo < COMBO_SHOWN:
             return Text.assemble("  ", ("💔 COMBO BREAKER", "bold red"), (f"  ×{broken[0]}", "red"))
         if self._combo < COMBO_SHOWN:
@@ -1723,6 +1808,10 @@ class GlowReporter(TerminalReporter):
             line3.append_text(
                 render.gradient_text(f"max combo ×{self._max_combo}", render.combo_stops(self._max_combo))
             )
+        golds = sum(1 for fs in self._files.values() if (self._split(fs) or 0) < 0)
+        if golds:
+            line3.append("  · ")
+            line3.append_text(render.gradient_text(f"{golds} gold split{'s' * (golds != 1)}", ("#facc15", "#fb923c")))
         if self._new_pb is not None:
             line3.append("  · ")
             line3.append_text(render.gradient_text("🏆 new PB", ("#facc15", "#fb923c")))
@@ -1764,6 +1853,8 @@ class GlowReporter(TerminalReporter):
                 lines.append(progress.xp_line(*self._xp))
             if self._quests is not None:
                 lines += quests.lines(self._quests, self._quests_done)
+        if self._pet is not None and self._done and exitstatus != pytest.ExitCode.INTERRUPTED:
+            lines.append(pet.line(self._pet, time.time(), self._pet_events))
 
         self.console.print()
         if self._failures and not getattr(self, "no_summary", False):
@@ -1882,6 +1973,14 @@ class GlowReporter(TerminalReporter):
             commit=commit,
             signatures=signatures,
         )
+        if self._splits:
+            self._history.record_splits(
+                {
+                    fs.path: (fs.total, fs.duration)
+                    for fs in self._files.values()
+                    if fs.total and fs.done >= fs.total and not any(fs.counts[c] for c in render.FAILING)
+                }
+            )
         self._history.tally(
             ok=not failing,
             counts=dict(self._counts),

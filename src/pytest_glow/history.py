@@ -13,6 +13,7 @@ MAX_RUNS = 300  # a busy week of them, for the wrapped's roles
 MAX_OUTCOMES = 12
 MAX_DURATIONS = 10
 MAX_TESTS = 5000
+MAX_SPLIT_SIZES = 3  # the sizes of a file kept a best time for: all of it, and what -k picks of it
 
 CODES = {
     "passed": "P",
@@ -44,6 +45,7 @@ class History:
         self.greens: int = int(data.get("greens", 0))  # green runs in a row, beyond the runs kept
         self.life: dict[str, Any] = dict(data.get("life", {}))  # totals since glow first ran here
         self.quests: dict[str, Any] = dict(data.get("quests", {}))  # today's, and how far along
+        self.splits: dict[str, dict[str, float]] = dict(data.get("splits", {}))  # file -> {tests: best time}
 
     @property
     def xp(self) -> int:
@@ -80,6 +82,22 @@ class History:
 
     def personal_best(self, n_tests: int) -> float | None:
         return self.best.get(str(n_tests))
+
+    def split(self, path: str, n_tests: int) -> float | None:
+        """The fastest the file's ``n_tests`` tests have gone green together."""
+        return self.splits.get(path, {}).get(str(n_tests))
+
+    def record_splits(self, files: dict[str, tuple[int, float]]) -> None:
+        """``files``: path -> (tests, seconds) of the files that went all green, all of them run."""
+        for path, (n, secs) in files.items():
+            entry = dict(self.splits.pop(path, {}))
+            best = entry.pop(str(n), secs)
+            entry[str(n)] = round(min(best, secs), 4)  # re-inserted: the size used last goes last
+            while len(entry) > MAX_SPLIT_SIZES:
+                entry.pop(next(iter(entry)))
+            self.splits[path] = entry
+        while len(self.splits) > MAX_TESTS:
+            self.splits.pop(next(iter(self.splits)))
 
     def median_duration(self, nodeid: str) -> float | None:
         d = self.tests.get(nodeid, {}).get("d", [])
@@ -214,6 +232,7 @@ class History:
                     "greens": self.greens,
                     "life": self.life,
                     "quests": self.quests,
+                    "splits": self.splits,
                 },
             )
 

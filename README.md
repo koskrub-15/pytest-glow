@@ -14,7 +14,8 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 - under pytest-xdist, a line per worker: what it's running, for how long, and how many tests it has done
 - an overall progress bar with an ETA, which turns red the moment something fails
 - failures as one-liners as soon as they happen, so you don't wait for the end of the run to see them
-- a combo counter for passes in a row, heating up as it grows, and a COMBO BREAKER when one fails
+- a combo counter for passes in a row, heating up as it grows, and when one fails, the screen comes apart for
+  a moment: C-C-C-COMBO BREAKER, then the diagnosis, SKILL ISSUE
 
 **At the end**
 - rich tracebacks: highlighted source, locals (without pytest's `@py_assert` noise), captured output
@@ -78,6 +79,8 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
 - personal bests: the fastest green run for a given number of tests, `🏆 new PB` when you beat it
 - the ghost of your personal best races the run: under the progress bar, a 👻 where the best run was by now,
   and `▲ 0.5s ahead` or `▼ 1.2s behind` (for suites that take 3 seconds or more)
+- speedrun splits: each file against its own best, when it's more than noise: `▼200ms GOLD` for a new best,
+  `▲100ms` behind it, and `3 gold splits` in the verdict. A file's slowdown shows the moment it finishes
 - achievements, each unlocked once per project: First Blood, Phoenix, Night Owl, Minimalist, Sniper,
   Speedrunner, Surgeon, Clean Sweep, Centurion, Friday Deploy, Archaeologist, Glass Cannon, Unstoppable,
   Boss Slayer, Shiny Hunter
@@ -112,12 +115,28 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
 - `pytest --glow-wrapped`: your project's year-in-review. Runs, time spent, green rate, level, records, a hall
   of shame (failed the most, flakiest, slowest), who you were this week (🦉 Night Owl, 🔁 Rerun Goblin, 🩹 Medic,
   🐇 Speed Demon…), the hours you test at, loot and achievements. Runs no tests
+- `pytest --glow-adopt`: a pet for the project, and it's forever. It asks once; you sign by naming it, and
+  there's no `--glow-abandon`. It lives outside the project's cache, so wiping that won't get rid of it. Every
+  green run feeds it: an egg hatches into a rubber duck `__(•<`, a bug `ϵ('Θ')϶`, a crab, a cat or a blob, and
+  it grows up from hatchling to elder. A red run makes it sick (`(=;ω;=) Pickle is sick ♥♥♥♡♡ · dies in 3 days
+  without a green run`), and a week of nothing but red kills it: 🪦. It shows in the verdict of the runs you
+  watch in a terminal, never in CI's
+- `--glow-chat`: a stream chat beside the live view, `● LIVE · 1.2k watching`. The viewers are made up; what they
+  react to isn't: `F in chat` and `who wrote test_vat` on a failure, `NOOOO the ×42` when it breaks a combo,
+  `is the database in the room with us` on a ConnectionError, `ResidentSleeper` for a test past 3 seconds, `×50
+  COMBO 🔥`, `skipped? coward`, and `GG EZ` or `uninstall` at the end. Viewers come with a combo and leave on a
+  failure. Under the live view in a terminal narrower than 120 columns; in a terminal only
+- `--glow-roast`: a line of abuse under every failure, aimed at what went wrong: `off by 0.5. so close, and yet
+  so red.`, `is the database in the room with us right now?`, `you wrote this 10 minutes ago. it didn't last an
+  hour.`, `red 4 runs in a row. at this point it's a feature.` In a terminal only
 - `--glow-share`: the run as an SVG card, ready to post
 - `--glow-sound`: 8-bit sounds, synthesized on the fly (nothing to license): a power-up at combo 10, 25, 50,
-  100…, a slide down on a COMBO BREAKER, hits and crits on the boss, then a level-clear jingle, an air horn for
-  a record, or the sad trombone. Hear them all with `python -m pytest_glow.sound`
+  100…, a C-C-C-stutter and a slide down on a COMBO BREAKER, hits and crits on the boss, then a level-clear
+  jingle, an air horn for a record, or the sad trombone. Hear them all with `python -m pytest_glow.sound`
 
 ![--glow-boss on a green run: the boss gets enraged, makes its last stand and falls, drops loot, and you level up](https://github.com/koskrub-15/pytest-glow/raw/main/docs/demo-boss.gif)
+
+![--glow-chat --glow-roast on a red run: a stream chat beside the live view, a ×42 combo broken into SKILL ISSUE, a roast under each failure, and a sick pet in the verdict](https://github.com/koskrub-15/pytest-glow/raw/main/docs/demo-chat.gif)
 
 ![a green run: combo, a green streak and XP](https://github.com/koskrub-15/pytest-glow/raw/main/docs/demo-green.gif)
 
@@ -152,6 +171,9 @@ Just run `pytest`. Everything else is optional:
 | `--glow-boss` or `PYTEST_GLOW_BOSS=1` | fight the suite as a boss; `glow_boss = true` in the ini to keep it on |
 | `--glow-sound` or `PYTEST_GLOW_SOUND=1` | 8-bit sounds for combos, the boss and the end of the run (terminal only); `glow_sound = true` in the ini |
 | `--glow-share[=PATH]` | save the run as an SVG card, `glow-card.svg` by default |
+| `--glow-adopt [NAME]` | adopt a pet for this project, for good, and exit |
+| `--glow-chat` or `PYTEST_GLOW_CHAT=1` | a stream chat beside the live view, reacting to the run (terminal only); `glow_chat = true` in the ini |
+| `--glow-roast` or `PYTEST_GLOW_ROAST=1` | a line of abuse under every failure, aimed at what went wrong (terminal only); `glow_roast = true` in the ini |
 | `--glow-cov-all` or `PYTEST_GLOW_COV_ALL=1` | list every file in the coverage table, the fully covered ones too; `glow_cov_all = true` in the ini |
 | `--glow-profile` or `PYTEST_GLOW_PROFILE=1` | split test time into the test, your code, libraries and fixtures; `glow_profile = true` in the ini |
 | `--glow-watch` | rerun on every save, failures and changed tests first; `f`, `c`, `p`, `d`, enter and `q` while it waits |
