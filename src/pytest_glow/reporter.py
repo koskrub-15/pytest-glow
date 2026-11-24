@@ -56,6 +56,7 @@ MAX_WORKERS_SHOWN = 8
 COMBO_SHOWN = 10  # passes in a row before the live view starts counting a combo
 COMBO_BROKEN = 1.5  # seconds a broken combo stays on screen
 SKILL_ISSUE = 25  # a combo this long, broken, gets the stutter
+PET_BOX_FROM = 80  # columns for the pet's own box under the verdict; a narrower terminal gets its line
 MAX_RERUN_IDS = 3  # beyond this, the rerun hint is `pytest --lf`
 SHINY_ODDS = 1 / 500  # the chance that a green run comes out shiny
 MIN_SAMPLES = 10  # fewer samples of a test than this, and its shares are noise
@@ -1853,8 +1854,12 @@ class GlowReporter(TerminalReporter):
                 lines.append(progress.xp_line(*self._xp))
             if self._quests is not None:
                 lines += quests.lines(self._quests, self._quests_done)
+        pet_card = None
         if self._pet is not None and self._done and exitstatus != pytest.ExitCode.INTERRUPTED:
-            lines.append(pet.line(self._pet, time.time(), self._pet_events))
+            if self.console.width >= PET_BOX_FROM:
+                pet_card = pet.card(self._pet, time.time(), self._pet_events)
+            else:
+                lines.append(pet.line(self._pet, time.time(), self._pet_events))
 
         self.console.print()
         if self._failures and not getattr(self, "no_summary", False):
@@ -1909,6 +1914,8 @@ class GlowReporter(TerminalReporter):
                     live.update(frame(elapsed))
                     time.sleep(1 / 60)
         self.console.print(panel())
+        if pet_card is not None:
+            self.console.print(pet_card)
         if self._share:
             self._save_card(icon, word, stops, counts, lines[1:])
         if self._player is not None and self._done:

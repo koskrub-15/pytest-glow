@@ -7,6 +7,7 @@ it lives outside the project's cache, so wiping that doesn't get rid of it eithe
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -15,7 +16,10 @@ import time
 import zlib
 from typing import Any
 
+from rich import box
 from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 from rich.text import Text
 
 from . import render
@@ -30,6 +34,81 @@ SPECIES = (  # (kind, happy, sick)
     ("cat", "(=^･ω･^=)", "(=;ω;=)"),
     ("blob", "(ᵔᴥᵔ)", "(ᵔ︵ᵔ)"),
 )
+# The big ones, for the box under the verdict: {e} is an eye, {m} the mouth. Each as wide as its widest line.
+ART = (
+    (
+        r"     __      ",
+        r"   <({e} )___  ",
+        r"    ( {m}  /  ",
+        r"     `----'  ",
+        r"   ~~~~~~~~~ ",
+    ),
+    (
+        r"   \     /   ",
+        r"   .-({e}{e})-.  ",
+        r"  -|::::::|- ",
+        r"  -|::::::|- ",
+        r"   `-.{m}.-'   ",
+    ),
+    (
+        r" (\/)   (\/) ",
+        r"  \ \___/ /  ",
+        r"   ( {e} {e} )   ",
+        r"  /(__{m}__)\  ",
+        r"   / / \ \   ",
+    ),
+    (
+        r"   /\_/\     ",
+        r"  ( {e}.{e} )    ",
+        r"   > {m} <     ",
+        r"  /|   |\  ~ ",
+        r" (_|   |_)/  ",
+    ),
+    (
+        r"   .-''-.    ",
+        r"  / {e}  {e} \   ",
+        r" |   {m}    |  ",
+        r"  \      /   ",
+        r"   `-..-'    ",
+    ),
+)
+EYES = {"happy": "•", "sick": "×"}
+MOUTHS = {"happy": ("._>", "w", "v", "w", "ᴗ"), "sick": ("._~", "~", "~", "~", "︵")}
+EGG = (
+    r"    .--.     ",
+    r"   /    \    ",
+    r"  |  ??  |   ",
+    r"   \    /    ",
+    r"    `--'     ",
+)
+GRAVE = (
+    r"    _____    ",
+    r"   /     \   ",
+    r"  |  RIP  |  ",
+    r"  |       |  ",
+    r" ~|_______|~ ",
+)
+HATS = {"hatchling": r"   _/\/\_    ", "teen": r"     _=_     ", "adult": r"      ★      ", "elder": r"     ♛       "}
+COLORS = ("#fde68a", "#a3e635", "#fb923c", "#f9a8d4", "#67e8f9")
+MOODS = {
+    "happy": (
+        "your tests taste great today",
+        "it hums the sound of a green bar",
+        "it thinks you write good asserts",
+        "it's napping on your coverage report",
+        "it would like another green run, please",
+        "it doesn't know what a flaky test is. keep it that way",
+    ),
+    "sick": (
+        "it's coughing up stack traces",
+        "it needs a green run. now.",
+        "it looked at your diff and lay down",
+        "the vet says: fix the tests",
+        "it's too weak to hold an assert",
+    ),
+    "egg": ("something moves inside", "it's warm. it's listening to your tests", "it hatches on green"),
+}
+
 CONTRACT = (
     "it lives in this project for good: there's no --glow-abandon, and wiping the cache won't do it",
     "every green run feeds it and it grows up; a week of nothing but red and it dies",
@@ -104,13 +183,19 @@ def live(pet: dict[str, Any], ok: bool, now: float) -> list[str]:
         pet["died"] = round(red_since + DIES_AFTER)
         return ["died"]
     if not ok:
+        pet["streak"] = 0
         if red_since is None:
             pet["red_since"] = round(now)
-            return ["sick"] if pet["meals"] else []  # an egg doesn't get sick
+            if not pet["meals"]:
+                return []  # an egg doesn't get sick
+            pet["sick_times"] = pet.get("sick_times", 0) + 1
+            return ["sick"]
         return []
     before = stage(pet["meals"])
     pet["meals"] += 1
     pet["red_since"] = None
+    pet["streak"] = pet.get("streak", 0) + 1
+    pet["best_streak"] = max(pet.get("best_streak", 0), pet["streak"])
     events = ["recovered"] if red_since is not None and pet["meals"] > 1 else []
     if before == "egg":
         return [*events, "hatched"]
@@ -141,7 +226,7 @@ def line(pet: dict[str, Any], now: float, events: list[str] | None = None) -> Te
     red_since = pet.get("red_since")
     if red_since is not None:
         left = min(max(DIES_AFTER - (now - red_since), 0), DIES_AFTER)  # red_since is rounded: maybe ahead of now
-        hearts = max(math.ceil(left / DIES_AFTER * HEARTS), 1)
+        hearts = _hearts(pet, now)
         text = Text.assemble((sick, "bold #f87171"), "  ", (name, "bold"), (" is sick ", "red"))
         text.append("♥" * hearts, style="#f87171")
         text.append("♡" * (HEARTS - hearts), style="grey37")
@@ -162,6 +247,142 @@ def line(pet: dict[str, Any], now: float, events: list[str] | None = None) -> Te
     elif "ate" in events:
         text.append("  · ate a green run 😋", style="dim")
     return text
+
+
+def _state(pet: dict[str, Any]) -> str:
+    if pet.get("died"):
+        return "dead"
+    if not pet["meals"]:
+        return "egg"
+    return "sick" if pet.get("red_since") is not None else "happy"
+
+
+def art(pet: dict[str, Any]) -> list[str]:
+    state = _state(pet)
+    if state in ("dead", "egg"):
+        lines = list(GRAVE if state == "dead" else EGG)
+        hat = ""
+    else:
+        species = pet["species"] % len(SPECIES)
+        eye, mouth = EYES[state], MOUTHS[state][species]
+        lines = [line.replace("{e}", eye).replace("{m}", mouth) for line in ART[species]]
+        hat = HATS.get(stage(pet["meals"]), "")
+    lines = [hat, *lines] if hat else ["", *lines]
+    width = max(len(line.rstrip()) for line in lines)
+    return [line.rstrip().ljust(width) for line in lines]
+
+
+def _next_stage(meals: int) -> tuple[str, int, int] | None:
+    """The stage after this one: its name, the meals it takes, and where this one started."""
+    for (at, _), (then, name) in itertools.pairwise(STAGES):
+        if at <= meals < then:
+            return name, then, at
+    return None
+
+
+def _mood(pet: dict[str, Any], now: float) -> str:
+    state = _state(pet)
+    if state == "dead":
+        return "it waited a week for a green run"
+    moods = MOODS[state]
+    return moods[zlib.crc32(f"{pet['name']}/{_date(now)}".encode()) % len(moods)]  # the same all day
+
+
+def _hearts(pet: dict[str, Any], now: float) -> int:
+    red_since = pet.get("red_since")
+    if red_since is None:
+        return HEARTS
+    left = min(max(DIES_AFTER - (now - red_since), 0), DIES_AFTER)  # red_since is rounded: maybe ahead of now
+    return max(math.ceil(left / DIES_AFTER * HEARTS), 1)
+
+
+def _status(pet: dict[str, Any], now: float, events: list[str]) -> Text:
+    state = _state(pet)
+    if state == "dead":
+        text = Text(f"died {_date(pet['died'])}, after a week of red", style="dim")
+        if "died" in events:
+            text.append("  💀 today", style="bold red")
+        return text
+    if state == "egg":
+        return Text("an egg · hatches on the first green run", style="dim")
+    hearts = _hearts(pet, now)
+    text = Text("♥" * hearts, style="#f87171" if state == "sick" else "#f472b6")
+    text.append("♡" * (HEARTS - hearts), style="grey37")
+    if state == "sick":
+        left = min(max(DIES_AFTER - (now - pet["red_since"]), 0), DIES_AFTER)
+        days = math.ceil(left / 86400)
+        text.append(f"  sick · dies in {days} day{'s' * (days != 1)} without a green run", style="red")
+    else:
+        text.append("  healthy", style="green")
+    for event, said, style in (
+        ("hatched", "🐣 hatched!", "bold #fde68a"),
+        ("grew", "✨ grew up!", "bold #fde68a"),
+        ("recovered", "🩹 better now", "bold green"),
+        ("ate", "ate a green run 😋", "dim"),
+    ):
+        if event in events:
+            text.append(f"  · {said}", style=style)
+            break
+    return text
+
+
+def card(pet: dict[str, Any], now: float, events: list[str] | None = None) -> Panel:
+    """The pet's own box under the verdict: big, with everything there is to know about it."""
+    state = _state(pet)
+    kind = SPECIES[pet["species"] % len(SPECIES)][0]
+    color = {"dead": "grey50", "egg": "#e5e7eb", "sick": "#f87171"}.get(state, COLORS[pet["species"] % len(COLORS)])
+    drawing = Text("\n".join(art(pet)), style=f"bold {color}", no_wrap=True)
+
+    info = Table.grid(padding=(0, 1))
+    info.add_column(no_wrap=True)
+    info.add_column()
+    what = {"egg": "egg", "dead": kind}.get(state, f"{stage(pet['meals'])} {kind}")
+    info.add_row("", Text.assemble((pet["name"], "bold"), (f"  the {what}", "dim")))
+    info.add_row("", _status(pet, now, events or []))
+    born = pet["born"]
+    end = pet.get("died") or now
+    days = int((end - born) // 86400)
+    info.add_row("🎂", Text(f"{days} day{'s' * (days != 1)} old · born {_date(born)}", style="dim"))
+    meals = pet["meals"]
+    fed = Text(f"{meals} meal{'s' * (meals != 1)}", style="dim")
+    after = _next_stage(meals)
+    if after is not None and state != "dead":
+        name, then, since = after
+        done = (meals - since) / (then - since)
+        cells = 12
+        filled = round(done * cells)
+        fed.append("  ")
+        fed.append("▰" * filled, style=color)
+        fed.append("▱" * (cells - filled), style="grey37")
+        fed.append(f"  {name} in {then - meals}", style="dim")
+    elif state != "dead":
+        fed.append("  · fully grown", style="dim")
+    info.add_row("🍖", fed)
+    if state != "egg":
+        streak, best, sick = pet.get("streak", 0), pet.get("best_streak", 0), pet.get("sick_times", 0)
+        record = Text(f"{streak} green in a row · best {best}", style="dim")
+        if sick:
+            record.append(f" · sick {sick} time{'s' * (sick != 1)}", style="dim")
+        info.add_row("🔥", record)
+    info.add_row("💭", Text(_mood(pet, now), style="italic"))
+    graves = pet.get("graves", [])
+    if graves:
+        names = ", ".join(g["name"] for g in graves[-3:])
+        info.add_row("🪦", Text(f"{len(graves)} before it: {names}", style="dim"))
+
+    body = Table.grid(padding=(0, 2))
+    body.add_column(no_wrap=True)
+    body.add_column()
+    body.add_row(drawing, info)
+    return Panel(
+        body,
+        title=Text(" 🐾 pet ", style="dim"),
+        title_align="left",
+        border_style=color,
+        box=box.ROUNDED,
+        expand=False,
+        padding=(0, 1),
+    )
 
 
 def main(root: str, name: str | None) -> int:
