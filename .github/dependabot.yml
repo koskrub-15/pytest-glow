@@ -1,0 +1,25 @@
+version: 2
+updates:
+  # The actions are pinned to commits: Dependabot moves the pin and the version comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+
+  # uv.lock: the dev tools and what the tests run on. The package's own ranges (pytest>=8.0, rich>=13.7)
+  # stay as they are: users get the latest anyway, and CI tests the oldest pytest on purpose.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    versioning-strategy: lockfile-only
+    groups:
+      python:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps"
