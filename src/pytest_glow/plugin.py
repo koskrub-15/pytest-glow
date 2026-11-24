@@ -113,6 +113,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="find the commit that broke TEST (a name, a node id, or TEST@COMMIT to start from) and exit",
     )
     group.addoption(
+        "--glow-chat",
+        action="store_true",
+        default=None,
+        help="a stream chat beside the live view, reacting to the run (terminal only; "
+        "also PYTEST_GLOW_CHAT=1 or glow_chat = true in the ini)",
+    )
+    group.addoption(
         "--glow-roast",
         action="store_true",
         default=None,
@@ -129,6 +136,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addini(
         "glow_cov_all", "list every file in the coverage table, the fully covered too", type="bool", default=False
     )
+    parser.addini("glow_chat", "a stream chat beside the live view", type="bool", default=False)
     parser.addini("glow_roast", "a line of abuse under every failure", type="bool", default=False)
     parser.addini("glow_summary", "on GitHub Actions, write a job summary of the run", type="bool", default=True)
     parser.addini("glow_ff", "run the likely failures first", type="bool", default=False)

@@ -26,7 +26,7 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, advice, hang, net, progress, quests, render, rerun, roast, share, sound
+from . import __version__, advice, chat, hang, net, progress, quests, render, rerun, roast, share, sound
 from . import achievements as ach
 from . import affected as aff
 from . import coverage as cov
@@ -264,6 +264,8 @@ class GlowReporter(TerminalReporter):
         self._splits = self._live_enabled and self._history.enabled
         self._roast = self._live_enabled and flag(config, "roast")
         self._blames: dict[str, Any] = {}  # nodeid -> what git blame said of the line it failed on
+        self._chat = chat.Chat(config.rootpath.name) if self._live_enabled and flag(config, "chat") else None
+        self._live_width: int | None = None  # what the live view leaves the file lines, the chat beside them
 
     # -- output plumbing ---------------------------------------------------------------
     # Other plugins (xdist, coverage, ...) write through the terminal reporter. While the
@@ -532,6 +534,8 @@ class GlowReporter(TerminalReporter):
         with self._lock:
             if self._t_run is None:
                 self._t_run = now
+                if self._chat is not None:
+                    self._chat.started(now, self._total)
             self._running[nodeid] = now
             self._locations[nodeid] = location
             fs = self._file(nodeid)
@@ -668,6 +672,14 @@ class GlowReporter(TerminalReporter):
                     broke = self._combo
                 self._combo = 0
             combo = self._combo
+            if self._chat is not None:
+                if ts.outcome == "passed":
+                    self._chat.passed(now, nodeid, combo)
+                elif ts.outcome in render.FAILING:
+                    told = next((self._crash(f) for f in reversed(self._failures) if f.report.nodeid == nodeid), "")
+                    self._chat.failed(now, nodeid, told, broke)
+                elif ts.outcome == "skipped":
+                    self._chat.skipped(now, nodeid)
             fs.counts[ts.outcome] += 1
             fs.duration += ts.duration
             fs.total = max(fs.total, fs.done)
@@ -736,7 +748,8 @@ class GlowReporter(TerminalReporter):
             icon = Text("◌", style="dim")
         else:
             icon = Text(render.glyph(cat), style=f"bold {render.style(cat)}")
-        width = max(10, min(40, self.console.width - self._path_width - 34))
+        room = (self._live_width or self.console.width) if live else self.console.width
+        width = max(10, min(40, room - self._path_width - 34))
         count = f"{fs.done}/{fs.total}" if live or fs.done < fs.total else str(fs.total)
         clock = render.fmt_clock(now - fs.started) if live else render.fmt_dur(fs.duration)
         line = Text.assemble(
@@ -783,6 +796,8 @@ class GlowReporter(TerminalReporter):
 
             failing = sum(self._counts[c] for c in render.FAILING) + len(self._collect_errors)
             parts: list = []
+            beside = self._chat is not None and self.console.width >= chat.SIDE_FROM
+            self._live_width = self.console.width - chat.WIDTH - 1 if beside else None
 
             active = sorted(
                 (fs for fs in self._files.values() if fs.started is not None and not fs.flushed),
@@ -855,7 +870,16 @@ class GlowReporter(TerminalReporter):
                 parts.append(combo)
             if self._status and self._verbose > 0:
                 parts.append(Text(self._status, style="dim"))
-            return Group(*parts)
+            if self._chat is None:
+                return Group(*parts)
+            self._chat.tick(now, self._running)
+            if not beside:
+                return Group(*parts, self._chat.panel(4))
+            side = Table.grid(expand=True)
+            side.add_column(ratio=1)
+            side.add_column(width=chat.WIDTH)
+            side.add_row(Group(*parts), self._chat.panel(max(len(parts), chat.LINES) - 2))
+            return side
 
     def _ghost_row(self, now: float, total: float) -> list | None:
         """The personal best, racing this run: where it was by now, and how far ahead of it, or behind, this run is."""
@@ -969,6 +993,11 @@ class GlowReporter(TerminalReporter):
             where = f" at {crash.path}:{crash.lineno}" if crash is not None else ""
             self._print(Text(f"  ◌ interrupted{where}", style="bold yellow"))
             self._keyboardinterrupt_memo = None
+        if self._chat is not None and self._done and exitstatus != pytest.ExitCode.INTERRUPTED:
+            said = self._chat.finished(time.monotonic(), not self._failing() and exitstatus == pytest.ExitCode.OK)
+            line = Text.assemble("\n  💬 ", said.line())
+            line.append(f"   · peak {chat.viewers_text(self._chat.peak)} watching", style="dim")
+            self._print(line)
         self._print_verdict(session, exitstatus)
         self._save_history(exitstatus)
 
