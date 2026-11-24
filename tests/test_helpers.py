@@ -221,6 +221,25 @@ def test_a_split_is_more_than_noise():
     assert split(1.0, None) is None
 
 
+def test_a_roast_aims_at_what_went_wrong():
+    import random
+
+    from pytest_glow import roast
+    from pytest_glow.blame import Blame
+
+    def every(message, **kw):
+        return {roast.roast(message, rnd=random.Random(seed), now=1e9, **kw) for seed in range(60)}
+
+    assert "off by 0.5. so close, and yet so red." in every("assert 4.0 == 4.5", summary="4.0 ≠ 4.5")
+    assert "'id': it was never there. it was never going to be there." in every("KeyError: 'id'")
+    assert any("billion-dollar" in r for r in every("AttributeError: 'NoneType' object has no attribute 'x'"))
+    assert "it has no x, and it never promised one" in every("AttributeError: 'Cart' object has no attribute 'x'")
+    mine = Blame("Ada", int(1e9) - 600, "abc", yours=True)
+    assert "you wrote this 10 minutes ago. it didn't last an hour." in every("boom", blame=mine)
+    assert "red 4 runs in a row. at this point it's a feature." in every("boom", outcomes="PFFF")
+    assert every("something odd") <= set(roast.ANYTHING)
+
+
 def test_combos_heat_up():
     assert render.combo_stops(10) == render.GRADIENTS["cyan"]
     assert render.combo_stops(150) == render.GRADIENTS["fire"]

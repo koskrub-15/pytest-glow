@@ -26,7 +26,7 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, advice, hang, net, progress, quests, render, rerun, share, sound
+from . import __version__, advice, hang, net, progress, quests, render, rerun, roast, share, sound
 from . import achievements as ach
 from . import affected as aff
 from . import coverage as cov
@@ -262,6 +262,8 @@ class GlowReporter(TerminalReporter):
         self._blamed_paths: set[str] = set()  # rootdir-relative files the failures point at
         # speedrun splits: each file against its best, in a terminal only, where the times are yours
         self._splits = self._live_enabled and self._history.enabled
+        self._roast = self._live_enabled and flag(config, "roast")
+        self._blames: dict[str, Any] = {}  # nodeid -> what git blame said of the line it failed on
 
     # -- output plumbing ---------------------------------------------------------------
     # Other plugins (xdist, coverage, ...) write through the terminal reporter. While the
@@ -1003,6 +1005,14 @@ class GlowReporter(TerminalReporter):
                 memory = self._memory(report)
                 if memory is not None:
                     self._print(Text.assemble(("  ↳ ", "dim"), (memory, "dim italic")))
+                if self._roast:
+                    burn = roast.roast(
+                        render.crash_message(report),
+                        summary=failure.diff.summary if failure.diff is not None else "",
+                        blame=self._blames.get(report.nodeid),
+                        outcomes=self._history.outcomes(report.nodeid),
+                    )
+                    self._print(Text.assemble(("  🔥 ", ""), (burn, "italic #fb923c")))
             if failure.traceback is not None:
                 render.shorten_paths(failure.traceback, str(self.config.invocation_params.dir))
                 self.console.print(failure.traceback)
@@ -1097,6 +1107,7 @@ class GlowReporter(TerminalReporter):
             found = blame(path, loc.lineno)
             if found is None:
                 return None
+            self._blames[report.nodeid] = found
             if found.when is not None:
                 age = time.time() - found.when
                 self._oldest_blame = max(age, self._oldest_blame or 0)

@@ -113,6 +113,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="find the commit that broke TEST (a name, a node id, or TEST@COMMIT to start from) and exit",
     )
     group.addoption(
+        "--glow-roast",
+        action="store_true",
+        default=None,
+        help="a line of abuse under every failure, aimed at what went wrong (terminal only; "
+        "also PYTEST_GLOW_ROAST=1 or glow_roast = true in the ini)",
+    )
+    group.addoption(
         "--glow-cov-all",
         action="store_true",
         default=None,
@@ -122,6 +129,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addini(
         "glow_cov_all", "list every file in the coverage table, the fully covered too", type="bool", default=False
     )
+    parser.addini("glow_roast", "a line of abuse under every failure", type="bool", default=False)
     parser.addini("glow_summary", "on GitHub Actions, write a job summary of the run", type="bool", default=True)
     parser.addini("glow_ff", "run the likely failures first", type="bool", default=False)
     parser.addini("glow_rerun", "run a failed test again, up to this many times", default="")

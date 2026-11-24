@@ -115,6 +115,9 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
 - `pytest --glow-wrapped`: your project's year-in-review. Runs, time spent, green rate, level, records, a hall
   of shame (failed the most, flakiest, slowest), who you were this week (🦉 Night Owl, 🔁 Rerun Goblin, 🩹 Medic,
   🐇 Speed Demon…), the hours you test at, loot and achievements. Runs no tests
+- `--glow-roast`: a line of abuse under every failure, aimed at what went wrong: `off by 0.5. so close, and yet
+  so red.`, `is the database in the room with us right now?`, `you wrote this 10 minutes ago. it didn't last an
+  hour.`, `red 4 runs in a row. at this point it's a feature.` In a terminal only
 - `--glow-share`: the run as an SVG card, ready to post
 - `--glow-sound`: 8-bit sounds, synthesized on the fly (nothing to license): a power-up at combo 10, 25, 50,
   100…, a C-C-C-stutter and a slide down on a COMBO BREAKER, hits and crits on the boss, then a level-clear
@@ -155,6 +158,7 @@ Just run `pytest`. Everything else is optional:
 | `--glow-boss` or `PYTEST_GLOW_BOSS=1` | fight the suite as a boss; `glow_boss = true` in the ini to keep it on |
 | `--glow-sound` or `PYTEST_GLOW_SOUND=1` | 8-bit sounds for combos, the boss and the end of the run (terminal only); `glow_sound = true` in the ini |
 | `--glow-share[=PATH]` | save the run as an SVG card, `glow-card.svg` by default |
+| `--glow-roast` or `PYTEST_GLOW_ROAST=1` | a line of abuse under every failure, aimed at what went wrong (terminal only); `glow_roast = true` in the ini |
 | `--glow-cov-all` or `PYTEST_GLOW_COV_ALL=1` | list every file in the coverage table, the fully covered ones too; `glow_cov_all = true` in the ini |
 | `--glow-profile` or `PYTEST_GLOW_PROFILE=1` | split test time into the test, your code, libraries and fixtures; `glow_profile = true` in the ini |
 | `--glow-watch` | rerun on every save, failures and changed tests first; `f`, `c`, `p`, `d`, enter and `q` while it waits |
