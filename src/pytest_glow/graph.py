@@ -48,14 +48,47 @@ def build(stored: dict, history: History, project: str) -> dict[str, Any]:
         own = nodeid.split("::", 1)[0]
         for path in sorted({own, *mapped.get(nodeid, {})}):
             links.append([len(tests) - 1, files.setdefault(path, len(files))])
+    untested = []
+    if mapped:  # the project's files no test runs code from: the map knows them all
+        # where the code under test lives (apps/, src/): not migrations, scripts or docs next to it
+        roots = {_root(path) for path in files if not _test_file(path)}
+        covered = _coverage(history.coverage, {path: 0 for path in stored.get("files", {})})
+        for path, entry in sorted(stored.get("files", {}).items()):
+            if path in files or _test_file(path) or _root(path) not in roots or entry[1] == 0:
+                continue
+            if covered.get(path) == 100:  # constants, run on import: nothing in it for a test to run
+                continue
+            untested.append(files.setdefault(path, len(files)))
     return {
         "project": project,
         "mapped": bool(mapped),
         "files": list(files),
+        "untested": untested,
+        "cov": _coverage(history.coverage, files),
         "tests": tests,
         "links": links,
         "more": max(len(nodeids) - MAX_TESTS, 0),
     }
+
+
+def _root(path: str) -> str:
+    return path.split("/", 1)[0] if "/" in path else ""
+
+
+def _test_file(path: str) -> bool:
+    name = path.rsplit("/", 1)[-1]
+    return name == "conftest.py" or name.startswith("test_") or name.endswith("_test.py")
+
+
+def _coverage(measured: dict[str, float], files: dict[str, int]) -> dict[str, float]:
+    """The last coverage of each file drawn, as coverage.py named it: relative to where pytest ran, or not."""
+    found = {}
+    for path, percent in measured.items():
+        path = path.replace(os.sep, "/")
+        for drawn in files:
+            if drawn == path or path.endswith("/" + drawn) or drawn.endswith("/" + path):
+                found[drawn] = round(percent, 1)
+    return found
 
 
 def html(data: dict[str, Any]) -> str:

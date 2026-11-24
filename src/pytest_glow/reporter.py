@@ -107,6 +107,8 @@ class Failure:
 
 _WARNING_LOCATION = re.compile(r"^\S+:\d+: ")
 _ADDRESS = re.compile(r"0x[0-9a-fA-F]{6,}")
+# what changes from one run of a failure to the next: quoted values, numbers
+_VALUES = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])")
 MAX_GROUPED_IDS = 8
 
 
@@ -122,12 +124,21 @@ def link_template() -> str | None:
     return "file://{path}"
 
 
-def _signature(report: Any) -> tuple | None:
-    """Failures with the same signature failed the same way: same place, same message."""
+def _signature(report: Any, *, values: bool = True) -> tuple | None:
+    """Failures with the same signature failed the same way: same place, same message.
+
+    ``values=False``: whatever the values in the message, for failures alike in a run (test_x[1], test_x[2]).
+    """
     crash = getattr(report.longrepr, "reprcrash", None)
     if crash is None:
         return None
-    return (report.when, str(crash.path), crash.lineno, _ADDRESS.sub("0x…", render.crash_message(report)))
+    message = _ADDRESS.sub("0x…", render.crash_message(report))
+    return (report.when, str(crash.path), crash.lineno, message if values else shape(message))
+
+
+def shape(message: str) -> str:
+    """A failure's message without its values: KeyError: 'u1' and KeyError: 'u2' are one failure."""
+    return _VALUES.sub("…", _ADDRESS.sub("0x…", message))
 
 
 def fingerprint(report: Any) -> str | None:
@@ -142,7 +153,7 @@ def group_failures(failures: list) -> list[list]:
     """Failures grouped by signature, in the order each group first failed."""
     groups: dict[Any, list] = {}
     for i, failure in enumerate(failures):
-        groups.setdefault(_signature(failure.report) or i, []).append(failure)
+        groups.setdefault(_signature(failure.report, values=False) or i, []).append(failure)
     return list(groups.values())
 
 
@@ -969,7 +980,7 @@ class GlowReporter(TerminalReporter):
                 )
                 self.console.print(render.GlowPanel(failure.diff.render(), render.GRADIENTS["glow"], title))
             if same:
-                self._print_same(same)
+                self._print_same(same, failure)
             for name, content in report.sections:
                 if not content.strip():
                     continue
@@ -1013,13 +1024,17 @@ class GlowReporter(TerminalReporter):
     def _node(self, nodeid: str, url: str | None = None) -> Text:
         return render.linked(render.nodeid_text(nodeid), url or self._test_url(nodeid))
 
-    def _print_same(self, same: list) -> None:
+    def _print_same(self, same: list, first: Failure) -> None:
         noun = "test" if len(same) == 1 else "tests"
         self.console.print(Text.assemble(("  ⧉ ", "bold red"), (f"the same failure in {len(same)} more {noun}", "red")))
+        told = self._crash(first)
         for failure in same[:MAX_GROUPED_IDS]:
-            self.console.print(
-                Text.assemble("    ", self._node(failure.report.nodeid, self._crash_url(failure.report)))
-            )
+            line = Text.assemble("    ", self._node(failure.report.nodeid, self._crash_url(failure.report)))
+            own = self._crash(failure)
+            if own != told:  # the same failure with other values: the values are the point
+                line.append(f"  {own}", style="dim")
+                line.truncate(self.console.width, overflow="ellipsis")
+            self.console.print(line)
         if len(same) > MAX_GROUPED_IDS:
             self.console.print(Text(f"    … and {len(same) - MAX_GROUPED_IDS} more", style="dim"))
 
@@ -1113,9 +1128,10 @@ class GlowReporter(TerminalReporter):
             return
         if result.show_table and result.files:
             self._rule("coverage", "cyan")
-            files = [f for f in result.files if not (result.skip_covered and f.percent >= 100)]
+            everything = flag(self.config, "cov_all")
+            files = [f for f in result.files if everything or not (result.skip_covered and f.percent >= 100)]
             hidden = 0
-            if len(files) > 25:
+            if len(files) > 25 and not everything:
                 partial = sorted((f for f in files if f.percent < 100), key=lambda f: f.percent)[:25]
                 hidden, files = len(files) - len(partial), partial
             width = min(max([len(f.path) for f in files] + [5]), 48)
@@ -1139,7 +1155,9 @@ class GlowReporter(TerminalReporter):
                         line.append(f"  {cov.ranges(f.missing)}", style="cyan")
                 self._print(line)
             if hidden:
-                self._print(Text(f"  … {hidden} fully covered files not shown", style="dim"))
+                self._print(
+                    Text(f"  … {hidden} fully covered files not shown (--glow-cov-all lists them)", style="dim")
+                )
             total = Text.assemble(
                 "  ",
                 ("total".ljust(width), "bold"),

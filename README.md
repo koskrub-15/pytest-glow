@@ -95,11 +95,20 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
   (the same boss every time), every failure costs you one of three hearts. Below half its HP it gets
   ENRAGED, below a tenth it makes its LAST STAND, and once slain it drops loot: sixteen items, common to
   legendary, to collect per project
+- `pytest --glow-bisect test_vat`: the commit that broke a test. Glow remembers the commit each test last
+  passed at, and from there to HEAD runs only that test, a binary search: `💥 broke in 8fe8b3a “tax: new rate”
+  Ann · 2 days ago`, with how it fails there and what the commit changed. It works in a git worktree of its
+  own, so your checkout and uncommitted changes stay as they are; `test_vat@v1.2` starts from a commit you
+  name. When it passes at HEAD, it tells you what breaks it isn't committed yet
 - `pytest --glow-graph`: your tests and the code they run, as a graph in the browser, like Obsidian's. Files
   sized by how many tests use them, tests coloured by how they've been doing, hubs in the middle. Click
   a file to see what editing it would run, a test to see what it touches; drag, zoom, search, or group the
-  tests by file. Built from `--glow-affected`'s map, so run with that once first. One HTML file, no network;
-  `--glow-graph=graph.html` saves it there instead of opening it
+  tests by file. The files no test runs code from stand apart as rings; `coverage` colours the files by
+  their last coverage. Built from `--glow-affected`'s map, so run with that once first. One HTML file, no
+  network; `--glow-graph=graph.html` saves it there instead of opening it
+
+  ![--glow-graph: test files with their tests around them, the code they run, and receipts.py, a file no test runs, as a ring apart](https://github.com/koskrub-15/pytest-glow/raw/main/docs/graph.png)
+
 - `pytest --glow-wrapped`: your project's year-in-review. Runs, time spent, green rate, level, records, a hall
   of shame (failed the most, flakiest, slowest), who you were this week (🦉 Night Owl, 🔁 Rerun Goblin, 🩹 Medic,
   🐇 Speed Demon…), the hours you test at, loot and achievements. Runs no tests
@@ -112,7 +121,7 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
 
 ![a green run: combo, a green streak and XP](https://github.com/koskrub-15/pytest-glow/raw/main/docs/demo-green.gif)
 
-![the end of a run up close: a rich traceback, coverage and the verdict](https://github.com/koskrub-15/pytest-glow/raw/main/docs/screenshot.svg)
+![the end of a run up close: a rich traceback, the diff of the values, coverage with the missing lines, an achievement and the verdict](https://github.com/koskrub-15/pytest-glow/raw/main/docs/screenshot.svg)
 
 **Coverage**: with `pytest-cov` installed, its plain table is replaced by a bar per file, the missing line
 ranges, per-file gains and drops since the last run, and the total plus `--cov-fail-under` in the verdict.
@@ -143,6 +152,7 @@ Just run `pytest`. Everything else is optional:
 | `--glow-boss` or `PYTEST_GLOW_BOSS=1` | fight the suite as a boss; `glow_boss = true` in the ini to keep it on |
 | `--glow-sound` or `PYTEST_GLOW_SOUND=1` | 8-bit sounds for combos, the boss and the end of the run (terminal only); `glow_sound = true` in the ini |
 | `--glow-share[=PATH]` | save the run as an SVG card, `glow-card.svg` by default |
+| `--glow-cov-all` or `PYTEST_GLOW_COV_ALL=1` | list every file in the coverage table, the fully covered ones too; `glow_cov_all = true` in the ini |
 | `--glow-profile` or `PYTEST_GLOW_PROFILE=1` | split test time into the test, your code, libraries and fixtures; `glow_profile = true` in the ini |
 | `--glow-watch` | rerun on every save, failures and changed tests first; `f`, `c`, `p`, `d`, enter and `q` while it waits |
 | `--glow-affected` or `PYTEST_GLOW_AFFECTED=1` | run only the tests that what changed can affect (Python 3.12+) |
@@ -150,6 +160,7 @@ Just run `pytest`. Everything else is optional:
 | `--glow-rerun[=N]` or `PYTEST_GLOW_RERUN=N` | rerun a failed test up to N times (1 by default) and call out flaky ones; `glow_rerun = N` in the ini |
 | `PYTEST_GLOW_SUMMARY=0` | no job summary on GitHub Actions; `glow_summary = false` in the ini |
 | `PYTEST_GLOW_QUESTS=0` | no daily quests |
+| `--glow-bisect TEST[@COMMIT]` | find the commit that broke a test, in a worktree of its own, and exit |
 | `--glow-graph[=PATH]` | draw the tests and the files they use as a graph in the browser and exit |
 | `--glow-wrapped` | show everything glow remembers about the project and exit; with `--glow-share`, save it as SVG |
 | `PYTEST_GLOW_LINK` | where clickable paths go, e.g. `pycharm://open?file={path}&line={line}`; `off` to turn them off |
@@ -169,7 +180,8 @@ pytest --cov=mypkg --cov-report=term-missing --cov-fail-under=90
 ```
 
 `term`, `term-missing` and `skip-covered` are respected; html, xml and json reports are still written
-as configured. Plain `--cov` measures `[tool.coverage.run] source` from your config. Set it there, or
+as configured. Past 25 files the table keeps to the ones not fully covered; `--glow-cov-all` lists every
+file, fully covered ones too, whatever `skip-covered` says. Plain `--cov` measures `[tool.coverage.run] source` from your config. Set it there, or
 your tests get measured too.
 
 ## Compatibility

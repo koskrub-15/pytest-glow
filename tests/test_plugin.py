@@ -206,6 +206,23 @@ def test_coverage_is_drawn_and_tracked(pytester):
     assert "vs last run" in out and "▲" in out
 
 
+def test_glow_cov_all_lists_the_fully_covered_files(pytester):
+    pytest.importorskip("pytest_cov")
+    modules = {f"m{i:02d}": "def f():\n    return 1\n" for i in range(30)}
+    pytester.makepyfile(**modules, mathy=COVERED)
+    pytester.makepyfile(
+        test_all="import mathy\n" + "".join(f"import m{i:02d}\n" for i in range(30)) + "def test_all():\n"
+        "    assert mathy.used(1)\n" + "".join(f"    m{i:02d}.f()\n" for i in range(30))
+    )
+    _, out = run(pytester, "--glow", "--cov=.", "--cov-report=term")
+    assert "mathy.py" in out and "m07.py" not in out
+    assert "fully covered files not shown (--glow-cov-all lists them)" in out
+    _, out = run(pytester, "--glow", "--cov=.", "--cov-report=term", "--glow-cov-all")
+    assert "m07.py" in out and "m29.py" in out and "not shown" not in out
+    _, out = run(pytester, "--glow", "--cov=.", "--cov-report=term:skip-covered", "--glow-cov-all")
+    assert "m07.py" in out  # over the report's skip-covered too
+
+
 def test_coverage_fail_under_fails_the_run(pytester):
     pytest.importorskip("pytest_cov")
     pytester.makepyfile(mathy=COVERED, test_mathy="from mathy import used\ndef test_used(): assert used(1)\n")
@@ -564,6 +581,29 @@ def test_same_failures_are_grouped(pytester):
     assert "⧉ the same failure in 3 more tests" in out
     assert "test_db.py::test_query[3]" in out
     assert "test_query[0] (setup)  +3 more like this  ConnectionError" in out
+    assert out.count("Traceback") == 2
+
+
+def test_failures_alike_but_for_their_values_are_one(pytester):
+    pytester.makepyfile(
+        test_v="""
+        import pytest
+
+        USERS = {"ann": 1}
+
+        @pytest.mark.parametrize("name", ["bob", "cid", "dan"])
+        def test_user(name):
+            assert USERS[name]
+
+        @pytest.mark.parametrize("n", [1, 3])
+        def test_double(n):
+            assert n * 2 == 4
+        """
+    )
+    _, out = run(pytester, "--glow", "-p", "no:randomly")
+    assert "failures (5 · 2 distinct)" in out
+    assert re.search(r"test_user\[cid\]\s+KeyError: 'cid'", out)  # one traceback, every value still shown
+    assert re.search(r"test_double\[3\]\s+6 ≠ 4", out)
     assert out.count("Traceback") == 2
 
 
