@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-24
+
 - Public: Dependabot for the actions and `uv.lock`, actions pinned to commits, a dependency audit in CI.
 - The live view keeps its terminal's width while a test runs: it used to drop to 80 columns then, with
   `--glow-chat` jumping under it and back.
