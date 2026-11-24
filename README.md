@@ -95,6 +95,11 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
   (the same boss every time), every failure costs you one of three hearts. Below half its HP it gets
   ENRAGED, below a tenth it makes its LAST STAND, and once slain it drops loot: sixteen items, common to
   legendary, to collect per project
+- `pytest --glow-bisect test_vat`: the commit that broke a test. Glow remembers the commit each test last
+  passed at, and from there to HEAD runs only that test, a binary search: `💥 broke in 8fe8b3a “tax: new rate”
+  Ann · 2 days ago`, with how it fails there and what the commit changed. It works in a git worktree of its
+  own, so your checkout and uncommitted changes stay as they are; `test_vat@v1.2` starts from a commit you
+  name. When it passes at HEAD, it tells you what breaks it isn't committed yet
 - `pytest --glow-graph`: your tests and the code they run, as a graph in the browser, like Obsidian's. Files
   sized by how many tests use them, tests coloured by how they've been doing, hubs in the middle. Click
   a file to see what editing it would run, a test to see what it touches; drag, zoom, search, or group the
@@ -152,6 +157,7 @@ Just run `pytest`. Everything else is optional:
 | `--glow-rerun[=N]` or `PYTEST_GLOW_RERUN=N` | rerun a failed test up to N times (1 by default) and call out flaky ones; `glow_rerun = N` in the ini |
 | `PYTEST_GLOW_SUMMARY=0` | no job summary on GitHub Actions; `glow_summary = false` in the ini |
 | `PYTEST_GLOW_QUESTS=0` | no daily quests |
+| `--glow-bisect TEST[@COMMIT]` | find the commit that broke a test, in a worktree of its own, and exit |
 | `--glow-graph[=PATH]` | draw the tests and the files they use as a graph in the browser and exit |
 | `--glow-wrapped` | show everything glow remembers about the project and exit; with `--glow-share`, save it as SVG |
 | `PYTEST_GLOW_LINK` | where clickable paths go, e.g. `pycharm://open?file={path}&line={line}`; `off` to turn them off |

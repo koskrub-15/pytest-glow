@@ -107,6 +107,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="draw the tests and the files they use as a graph, in an HTML file (opened in the browser) and exit",
     )
     group.addoption(
+        "--glow-bisect",
+        metavar="TEST",
+        default=None,
+        help="find the commit that broke TEST (a name, a node id, or TEST@COMMIT to start from) and exit",
+    )
+    group.addoption(
         "--glow-cov-all",
         action="store_true",
         default=None,
@@ -194,6 +200,13 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
             capture.stop_global_capturing()
         params = config.invocation_params
         return watch.main(params.args, str(params.dir), str(config.rootpath))
+    wanted = config.getoption("glow_bisect", None)
+    if wanted:
+        from _pytest.cacheprovider import Cache
+
+        from . import culprit
+
+        return culprit.main(str(config.rootpath), Cache.for_config(config, _ispytest=True), wanted)
     graph_path = config.getoption("glow_graph", None)
     if graph_path is not None:
         return _graph(config, graph_path or None)

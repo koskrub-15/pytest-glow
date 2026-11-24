@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+- `--glow-bisect TEST`: the commit that broke a test, by a binary search from the commit it last passed at,
+  in a git worktree of its own.
 - `--glow-graph`: the files no test runs code from, as rings apart; colour the files by their coverage.
 - `--glow-cov-all`: the coverage table lists every file, the fully covered ones too.
 - Failures alike but for their values are one: `KeyError: 'u1'` and `'u2'` on the same line, `test_x[1]` and
