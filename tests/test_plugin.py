@@ -567,6 +567,29 @@ def test_same_failures_are_grouped(pytester):
     assert out.count("Traceback") == 2
 
 
+def test_failures_alike_but_for_their_values_are_one(pytester):
+    pytester.makepyfile(
+        test_v="""
+        import pytest
+
+        USERS = {"ann": 1}
+
+        @pytest.mark.parametrize("name", ["bob", "cid", "dan"])
+        def test_user(name):
+            assert USERS[name]
+
+        @pytest.mark.parametrize("n", [1, 3])
+        def test_double(n):
+            assert n * 2 == 4
+        """
+    )
+    _, out = run(pytester, "--glow", "-p", "no:randomly")
+    assert "failures (5 · 2 distinct)" in out
+    assert re.search(r"test_user\[cid\]\s+KeyError: 'cid'", out)  # one traceback, every value still shown
+    assert re.search(r"test_double\[3\]\s+6 ≠ 4", out)
+    assert out.count("Traceback") == 2
+
+
 def test_no_links_when_piped(pytester):
     pytester.makepyfile("def test_a(): assert 0\n")
     result = pytester.runpytest_subprocess("--glow")

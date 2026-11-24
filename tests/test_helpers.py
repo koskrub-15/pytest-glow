@@ -665,3 +665,12 @@ def test_wrapped_roles_of_the_week():
     assert found[0] == ("🔁", "Rerun Goblin", "30 runs on Wednesday alone")
     assert ("🧱", "Unbreakable", "30 runs, not one red") in found
     assert len(roles(owl + goblin + medic, now)) == 3
+
+
+def test_failure_shape_leaves_out_the_values():
+    from pytest_glow.reporter import shape
+
+    assert shape("KeyError: 'u1'") == shape("KeyError: 'u2'") == "KeyError: …"
+    assert shape("assert 3 == 4") == "assert … == …"
+    assert shape("x1 is not v2.3") == "x1 is not v2.3"  # names keep their digits
+    assert shape("bad at 0x7f00aabbcc") == "bad at 0x…"
