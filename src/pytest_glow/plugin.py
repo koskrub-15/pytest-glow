@@ -113,6 +113,28 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="find the commit that broke TEST (a name, a node id, or TEST@COMMIT to start from) and exit",
     )
     group.addoption(
+        "--glow-adopt",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="NAME",
+        help="adopt a pet for this project, for good: green runs feed it, a week of red kills it; and exit",
+    )
+    group.addoption(
+        "--glow-chat",
+        action="store_true",
+        default=None,
+        help="a stream chat beside the live view, reacting to the run (terminal only; "
+        "also PYTEST_GLOW_CHAT=1 or glow_chat = true in the ini)",
+    )
+    group.addoption(
+        "--glow-roast",
+        action="store_true",
+        default=None,
+        help="a line of abuse under every failure, aimed at what went wrong (terminal only; "
+        "also PYTEST_GLOW_ROAST=1 or glow_roast = true in the ini)",
+    )
+    group.addoption(
         "--glow-cov-all",
         action="store_true",
         default=None,
@@ -122,6 +144,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addini(
         "glow_cov_all", "list every file in the coverage table, the fully covered too", type="bool", default=False
     )
+    parser.addini("glow_chat", "a stream chat beside the live view", type="bool", default=False)
+    parser.addini("glow_roast", "a line of abuse under every failure", type="bool", default=False)
     parser.addini("glow_summary", "on GitHub Actions, write a job summary of the run", type="bool", default=True)
     parser.addini("glow_ff", "run the likely failures first", type="bool", default=False)
     parser.addini("glow_rerun", "run a failed test again, up to this many times", default="")
@@ -200,6 +224,14 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
             capture.stop_global_capturing()
         params = config.invocation_params
         return watch.main(params.args, str(params.dir), str(config.rootpath))
+    adopting = config.getoption("glow_adopt", None)
+    if adopting is not None:
+        from . import pet
+
+        capture = config.pluginmanager.get_plugin("capturemanager")
+        if capture is not None:
+            capture.stop_global_capturing()  # it asks for a name
+        return pet.main(str(config.rootpath), adopting or None)
     wanted = config.getoption("glow_bisect", None)
     if wanted:
         from _pytest.cacheprovider import Cache
