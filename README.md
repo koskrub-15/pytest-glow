@@ -79,6 +79,8 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
 - personal bests: the fastest green run for a given number of tests, `🏆 new PB` when you beat it
 - the ghost of your personal best races the run: under the progress bar, a 👻 where the best run was by now,
   and `▲ 0.5s ahead` or `▼ 1.2s behind` (for suites that take 3 seconds or more)
+- speedrun splits: each file against its own best, when it's more than noise: `▼200ms GOLD` for a new best,
+  `▲100ms` behind it, and `3 gold splits` in the verdict. A file's slowdown shows the moment it finishes
 - achievements, each unlocked once per project: First Blood, Phoenix, Night Owl, Minimalist, Sniper,
   Speedrunner, Surgeon, Clean Sweep, Centurion, Friday Deploy, Archaeologist, Glass Cannon, Unstoppable,
   Boss Slayer, Shiny Hunter

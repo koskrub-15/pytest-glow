@@ -199,6 +199,28 @@ def test_a_broken_combo_glitches_the_screen():
     assert "S K I L L   I S S U E" in render.skill_issue(42, render.GLITCH * 0.75).plain
 
 
+def test_splits_keep_each_files_best_by_size():
+    history = History(None)
+    history.record_splits({"test_a.py": (10, 2.0)})
+    history.record_splits({"test_a.py": (10, 1.5), "test_b.py": (3, 0.4)})
+    history.record_splits({"test_a.py": (10, 1.8)})
+    assert history.split("test_a.py", 10) == 1.5
+    assert history.split("test_a.py", 4) is None  # -k picked a part of it: a race of its own
+    for n in (1, 2, 3):
+        history.record_splits({"test_a.py": (n, 0.1)})
+    assert history.split("test_a.py", 10) is None and len(history.splits["test_a.py"]) == 3
+
+
+def test_a_split_is_more_than_noise():
+    from pytest_glow.reporter import split
+
+    assert split(1.5, 2.0) == -0.5  # gold
+    assert split(2.5, 2.0) == 0.5
+    assert split(2.03, 2.0) is None  # within 5%
+    assert split(0.01, 0.03) is None  # too short to race
+    assert split(1.0, None) is None
+
+
 def test_combos_heat_up():
     assert render.combo_stops(10) == render.GRADIENTS["cyan"]
     assert render.combo_stops(150) == render.GRADIENTS["fire"]

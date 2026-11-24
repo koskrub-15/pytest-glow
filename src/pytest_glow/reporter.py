@@ -63,6 +63,7 @@ PROFILE_STYLES = {"fixtures": "#6b7280", "test": "#22d3ee", "code": "#e879f9", "
 NET_SHOWN = 4  # hosts listed under "tests go online"
 GHOST_MIN = 3.0  # seconds a personal best has to take for its ghost to race this run
 SLOWER = 2.0  # a test this many times its usual duration (and 100ms more) is called out
+SPLIT_MIN = 0.05  # seconds a file's best has to take before its splits mean more than noise
 
 
 @dataclass
@@ -158,6 +159,14 @@ def group_failures(failures: list) -> list[list]:
     return list(groups.values())
 
 
+def split(secs: float, best: float | None) -> float | None:
+    """How far ahead of its best (below 0) or behind a file finished, when it's more than noise."""
+    if best is None or best < SPLIT_MIN:
+        return None
+    delta = secs - best
+    return delta if abs(delta) > max(0.02, best * 0.05) else None
+
+
 def _markup_style(markup: dict) -> str:
     return " ".join(k for k, v in markup.items() if v and k not in ("flush", "erase"))
 
@@ -251,6 +260,8 @@ class GlowReporter(TerminalReporter):
         self._new_pb: float | None = None  # the record this run just beat
         self._unlocked: list[ach.Achievement] = []
         self._blamed_paths: set[str] = set()  # rootdir-relative files the failures point at
+        # speedrun splits: each file against its best, in a terminal only, where the times are yours
+        self._splits = self._live_enabled and self._history.enabled
 
     # -- output plumbing ---------------------------------------------------------------
     # Other plugins (xdist, coverage, ...) write through the terminal reporter. While the
@@ -740,7 +751,20 @@ class GlowReporter(TerminalReporter):
         if bad:
             line.append("  ")
             line.append_text(bad)
+        elif not live:
+            delta = self._split(fs)
+            if delta is not None and delta < 0:
+                line.append(f"  ▼{render.fmt_dur(-delta)} ", style="bold #facc15")
+                line.append_text(render.gradient_text("GOLD", ("#facc15", "#fb923c")))
+            elif delta is not None:
+                line.append(f"  ▲{render.fmt_dur(delta)}", style="red")
         return line
+
+    def _split(self, fs: FileState) -> float | None:
+        """The file against its best, all green and all of it run."""
+        if not self._splits or fs.done < fs.total or any(fs.counts[c] for c in render.FAILING):
+            return None
+        return split(fs.duration, self._history.split(fs.path, fs.total))
 
     # -- the live view ------------------------------------------------------------------
 
@@ -1719,6 +1743,10 @@ class GlowReporter(TerminalReporter):
             line3.append_text(
                 render.gradient_text(f"max combo ×{self._max_combo}", render.combo_stops(self._max_combo))
             )
+        golds = sum(1 for fs in self._files.values() if (self._split(fs) or 0) < 0)
+        if golds:
+            line3.append("  · ")
+            line3.append_text(render.gradient_text(f"{golds} gold split{'s' * (golds != 1)}", ("#facc15", "#fb923c")))
         if self._new_pb is not None:
             line3.append("  · ")
             line3.append_text(render.gradient_text("🏆 new PB", ("#facc15", "#fb923c")))
@@ -1876,6 +1904,14 @@ class GlowReporter(TerminalReporter):
             commit=commit,
             signatures=signatures,
         )
+        if self._splits:
+            self._history.record_splits(
+                {
+                    fs.path: (fs.total, fs.duration)
+                    for fs in self._files.values()
+                    if fs.total and fs.done >= fs.total and not any(fs.counts[c] for c in render.FAILING)
+                }
+            )
         self._history.tally(
             ok=not failing,
             counts=dict(self._counts),
