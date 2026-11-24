@@ -143,6 +143,7 @@ Just run `pytest`. Everything else is optional:
 | `--glow-boss` or `PYTEST_GLOW_BOSS=1` | fight the suite as a boss; `glow_boss = true` in the ini to keep it on |
 | `--glow-sound` or `PYTEST_GLOW_SOUND=1` | 8-bit sounds for combos, the boss and the end of the run (terminal only); `glow_sound = true` in the ini |
 | `--glow-share[=PATH]` | save the run as an SVG card, `glow-card.svg` by default |
+| `--glow-cov-all` or `PYTEST_GLOW_COV_ALL=1` | list every file in the coverage table, the fully covered ones too; `glow_cov_all = true` in the ini |
 | `--glow-profile` or `PYTEST_GLOW_PROFILE=1` | split test time into the test, your code, libraries and fixtures; `glow_profile = true` in the ini |
 | `--glow-watch` | rerun on every save, failures and changed tests first; `f`, `c`, `p`, `d`, enter and `q` while it waits |
 | `--glow-affected` or `PYTEST_GLOW_AFFECTED=1` | run only the tests that what changed can affect (Python 3.12+) |
@@ -169,7 +170,8 @@ pytest --cov=mypkg --cov-report=term-missing --cov-fail-under=90
 ```
 
 `term`, `term-missing` and `skip-covered` are respected; html, xml and json reports are still written
-as configured. Plain `--cov` measures `[tool.coverage.run] source` from your config. Set it there, or
+as configured. Past 25 files the table keeps to the ones not fully covered; `--glow-cov-all` lists every
+file, fully covered ones too, whatever `skip-covered` says. Plain `--cov` measures `[tool.coverage.run] source` from your config. Set it there, or
 your tests get measured too.
 
 ## Compatibility

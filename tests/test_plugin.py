@@ -206,6 +206,23 @@ def test_coverage_is_drawn_and_tracked(pytester):
     assert "vs last run" in out and "▲" in out
 
 
+def test_glow_cov_all_lists_the_fully_covered_files(pytester):
+    pytest.importorskip("pytest_cov")
+    modules = {f"m{i:02d}": "def f():\n    return 1\n" for i in range(30)}
+    pytester.makepyfile(**modules, mathy=COVERED)
+    pytester.makepyfile(
+        test_all="import mathy\n" + "".join(f"import m{i:02d}\n" for i in range(30)) + "def test_all():\n"
+        "    assert mathy.used(1)\n" + "".join(f"    m{i:02d}.f()\n" for i in range(30))
+    )
+    _, out = run(pytester, "--glow", "--cov=.", "--cov-report=term")
+    assert "mathy.py" in out and "m07.py" not in out
+    assert "fully covered files not shown (--glow-cov-all lists them)" in out
+    _, out = run(pytester, "--glow", "--cov=.", "--cov-report=term", "--glow-cov-all")
+    assert "m07.py" in out and "m29.py" in out and "not shown" not in out
+    _, out = run(pytester, "--glow", "--cov=.", "--cov-report=term:skip-covered", "--glow-cov-all")
+    assert "m07.py" in out  # over the report's skip-covered too
+
+
 def test_coverage_fail_under_fails_the_run(pytester):
     pytest.importorskip("pytest_cov")
     pytester.makepyfile(mathy=COVERED, test_mathy="from mathy import used\ndef test_used(): assert used(1)\n")

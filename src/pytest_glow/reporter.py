@@ -1128,9 +1128,10 @@ class GlowReporter(TerminalReporter):
             return
         if result.show_table and result.files:
             self._rule("coverage", "cyan")
-            files = [f for f in result.files if not (result.skip_covered and f.percent >= 100)]
+            everything = flag(self.config, "cov_all")
+            files = [f for f in result.files if everything or not (result.skip_covered and f.percent >= 100)]
             hidden = 0
-            if len(files) > 25:
+            if len(files) > 25 and not everything:
                 partial = sorted((f for f in files if f.percent < 100), key=lambda f: f.percent)[:25]
                 hidden, files = len(files) - len(partial), partial
             width = min(max([len(f.path) for f in files] + [5]), 48)
@@ -1154,7 +1155,9 @@ class GlowReporter(TerminalReporter):
                         line.append(f"  {cov.ranges(f.missing)}", style="cyan")
                 self._print(line)
             if hidden:
-                self._print(Text(f"  … {hidden} fully covered files not shown", style="dim"))
+                self._print(
+                    Text(f"  … {hidden} fully covered files not shown (--glow-cov-all lists them)", style="dim")
+                )
             total = Text.assemble(
                 "  ",
                 ("total".ljust(width), "bold"),

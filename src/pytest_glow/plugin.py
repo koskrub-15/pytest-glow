@@ -106,6 +106,16 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         metavar="PATH",
         help="draw the tests and the files they use as a graph, in an HTML file (opened in the browser) and exit",
     )
+    group.addoption(
+        "--glow-cov-all",
+        action="store_true",
+        default=None,
+        help="list every file in the coverage table, the fully covered ones too "
+        "(also PYTEST_GLOW_COV_ALL=1 or glow_cov_all = true in the ini)",
+    )
+    parser.addini(
+        "glow_cov_all", "list every file in the coverage table, the fully covered too", type="bool", default=False
+    )
     parser.addini("glow_summary", "on GitHub Actions, write a job summary of the run", type="bool", default=True)
     parser.addini("glow_ff", "run the likely failures first", type="bool", default=False)
     parser.addini("glow_rerun", "run a failed test again, up to this many times", default="")
