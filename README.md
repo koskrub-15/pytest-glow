@@ -242,6 +242,13 @@ uv run ruff check src tests && uv run ruff format src tests
 
 The tests run pytest in subprocesses (`pytester`) with `--glow` forced and check what comes out.
 
+## Vibe-coded
+
+pytest-glow is vibe-coded: written with [Claude Code](https://claude.com/claude-code), every line of it. A
+human decides what it does, how it should feel and what's too much; the code comes from the model. What keeps
+it honest is the same as for any other project: the tests (run on every Python from 3.10 to 3.14, Linux and
+macOS), the CI, and actually using it every day.
+
 ## License
 
 MIT
