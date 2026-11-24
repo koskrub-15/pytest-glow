@@ -104,8 +104,11 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
   sized by how many tests use them, tests coloured by how they've been doing, hubs in the middle. Click
   a file to see what editing it would run, a test to see what it touches; drag, zoom, search, or group the
   tests by file. The files no test runs code from stand apart as rings; `coverage` colours the files by
-  their last coverage. Built from `--glow-affected`'s map, so run with that once first. One HTML file, no network;
-  `--glow-graph=graph.html` saves it there instead of opening it
+  their last coverage. Built from `--glow-affected`'s map, so run with that once first. One HTML file, no
+  network; `--glow-graph=graph.html` saves it there instead of opening it
+
+  ![--glow-graph: test files with their tests around them, the code they run, and receipts.py, a file no test runs, as a ring apart](https://github.com/koskrub-15/pytest-glow/raw/main/docs/graph.png)
+
 - `pytest --glow-wrapped`: your project's year-in-review. Runs, time spent, green rate, level, records, a hall
   of shame (failed the most, flakiest, slowest), who you were this week (🦉 Night Owl, 🔁 Rerun Goblin, 🩹 Medic,
   🐇 Speed Demon…), the hours you test at, loot and achievements. Runs no tests
@@ -118,7 +121,7 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
 
 ![a green run: combo, a green streak and XP](https://github.com/koskrub-15/pytest-glow/raw/main/docs/demo-green.gif)
 
-![the end of a run up close: a rich traceback, coverage and the verdict](https://github.com/koskrub-15/pytest-glow/raw/main/docs/screenshot.svg)
+![the end of a run up close: a rich traceback, the diff of the values, coverage with the missing lines, an achievement and the verdict](https://github.com/koskrub-15/pytest-glow/raw/main/docs/screenshot.svg)
 
 **Coverage**: with `pytest-cov` installed, its plain table is replaced by a bar per file, the missing line
 ranges, per-file gains and drops since the last run, and the total plus `--cov-fail-under` in the verdict.
