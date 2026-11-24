@@ -26,7 +26,7 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, advice, chat, hang, net, progress, quests, render, rerun, roast, share, sound
+from . import __version__, advice, chat, hang, net, pet, progress, quests, render, rerun, roast, share, sound
 from . import achievements as ach
 from . import affected as aff
 from . import coverage as cov
@@ -266,6 +266,9 @@ class GlowReporter(TerminalReporter):
         self._blames: dict[str, Any] = {}  # nodeid -> what git blame said of the line it failed on
         self._chat = chat.Chat(config.rootpath.name) if self._live_enabled and flag(config, "chat") else None
         self._live_width: int | None = None  # what the live view leaves the file lines, the chat beside them
+        # the pet, when one was adopted here: it lives on the runs you watch, never on CI's
+        self._pet = pet.load(str(config.rootpath)) if self._live_enabled else None
+        self._pet_events: list[str] = []
 
     # -- output plumbing ---------------------------------------------------------------
     # Other plugins (xdist, coverage, ...) write through the terminal reporter. While the
@@ -993,6 +996,10 @@ class GlowReporter(TerminalReporter):
             where = f" at {crash.path}:{crash.lineno}" if crash is not None else ""
             self._print(Text(f"  ◌ interrupted{where}", style="bold yellow"))
             self._keyboardinterrupt_memo = None
+        if self._pet is not None and self._done and exitstatus != pytest.ExitCode.INTERRUPTED:
+            ok = not self._failing() and exitstatus == pytest.ExitCode.OK
+            self._pet_events = pet.live(self._pet, ok, time.time())
+            pet.save(str(self.config.rootpath), self._pet)
         if self._chat is not None and self._done and exitstatus != pytest.ExitCode.INTERRUPTED:
             said = self._chat.finished(time.monotonic(), not self._failing() and exitstatus == pytest.ExitCode.OK)
             line = Text.assemble("\n  💬 ", said.line())
@@ -1828,6 +1835,8 @@ class GlowReporter(TerminalReporter):
                 lines.append(progress.xp_line(*self._xp))
             if self._quests is not None:
                 lines += quests.lines(self._quests, self._quests_done)
+        if self._pet is not None and self._done and exitstatus != pytest.ExitCode.INTERRUPTED:
+            lines.append(pet.line(self._pet, time.time(), self._pet_events))
 
         self.console.print()
         if self._failures and not getattr(self, "no_summary", False):

@@ -113,6 +113,14 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="find the commit that broke TEST (a name, a node id, or TEST@COMMIT to start from) and exit",
     )
     group.addoption(
+        "--glow-adopt",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="NAME",
+        help="adopt a pet for this project, for good: green runs feed it, a week of red kills it; and exit",
+    )
+    group.addoption(
         "--glow-chat",
         action="store_true",
         default=None,
@@ -216,6 +224,14 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
             capture.stop_global_capturing()
         params = config.invocation_params
         return watch.main(params.args, str(params.dir), str(config.rootpath))
+    adopting = config.getoption("glow_adopt", None)
+    if adopting is not None:
+        from . import pet
+
+        capture = config.pluginmanager.get_plugin("capturemanager")
+        if capture is not None:
+            capture.stop_global_capturing()  # it asks for a name
+        return pet.main(str(config.rootpath), adopting or None)
     wanted = config.getoption("glow_bisect", None)
     if wanted:
         from _pytest.cacheprovider import Cache

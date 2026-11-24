@@ -115,6 +115,12 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
 - `pytest --glow-wrapped`: your project's year-in-review. Runs, time spent, green rate, level, records, a hall
   of shame (failed the most, flakiest, slowest), who you were this week (🦉 Night Owl, 🔁 Rerun Goblin, 🩹 Medic,
   🐇 Speed Demon…), the hours you test at, loot and achievements. Runs no tests
+- `pytest --glow-adopt`: a pet for the project, and it's forever. It asks once; you sign by naming it, and
+  there's no `--glow-abandon`. It lives outside the project's cache, so wiping that won't get rid of it. Every
+  green run feeds it: an egg hatches into a rubber duck `__(•<`, a bug `ϵ('Θ')϶`, a crab, a cat or a blob, and
+  it grows up from hatchling to elder. A red run makes it sick (`(=;ω;=) Pickle is sick ♥♥♥♡♡ · dies in 3 days
+  without a green run`), and a week of nothing but red kills it: 🪦. It shows in the verdict of the runs you
+  watch in a terminal, never in CI's
 - `--glow-chat`: a stream chat beside the live view, `● LIVE · 1.2k watching`. The viewers are made up; what they
   react to isn't: `F in chat` and `who wrote test_vat` on a failure, `NOOOO the ×42` when it breaks a combo,
   `is the database in the room with us` on a ConnectionError, `ResidentSleeper` for a test past 3 seconds, `×50
@@ -163,6 +169,7 @@ Just run `pytest`. Everything else is optional:
 | `--glow-boss` or `PYTEST_GLOW_BOSS=1` | fight the suite as a boss; `glow_boss = true` in the ini to keep it on |
 | `--glow-sound` or `PYTEST_GLOW_SOUND=1` | 8-bit sounds for combos, the boss and the end of the run (terminal only); `glow_sound = true` in the ini |
 | `--glow-share[=PATH]` | save the run as an SVG card, `glow-card.svg` by default |
+| `--glow-adopt [NAME]` | adopt a pet for this project, for good, and exit |
 | `--glow-chat` or `PYTEST_GLOW_CHAT=1` | a stream chat beside the live view, reacting to the run (terminal only); `glow_chat = true` in the ini |
 | `--glow-roast` or `PYTEST_GLOW_ROAST=1` | a line of abuse under every failure, aimed at what went wrong (terminal only); `glow_roast = true` in the ini |
 | `--glow-cov-all` or `PYTEST_GLOW_COV_ALL=1` | list every file in the coverage table, the fully covered ones too; `glow_cov_all = true` in the ini |
