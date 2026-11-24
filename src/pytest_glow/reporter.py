@@ -18,7 +18,7 @@ from typing import IO, Any
 
 import pytest
 from _pytest.terminal import TerminalReporter
-from rich.console import Console, Group
+from rich.console import Console, ConsoleDimensions, Group
 from rich.live import Live
 from rich.padding import Padding
 from rich.panel import Panel
@@ -179,11 +179,32 @@ class _LiveView:
         return self.reporter._render_live()
 
 
+class TermConsole(Console):
+    """Sized by the terminal it writes to. Rich asks fds 0-2, which pytest swaps for files while a test runs:
+    the live view, drawn then, would come out 80 columns wide, the chat under it, jumping back between tests."""
+
+    @property
+    def size(self) -> ConsoleDimensions:
+        if self._width is None or self._height is None:
+            try:
+                width, height = os.get_terminal_size(self.file.fileno())
+            except (AttributeError, ValueError, OSError):
+                pass
+            else:
+                if width and height:
+                    return ConsoleDimensions(self._width or width, self._height or height)
+        return super().size
+
+    @size.setter
+    def size(self, new_size: tuple[int, int]) -> None:
+        Console.size.fset(self, new_size)
+
+
 class GlowReporter(TerminalReporter):
     def __init__(self, config: pytest.Config, stream: IO[str], force: bool = False) -> None:
         super().__init__(config, stream)
         color = config.getoption("color", "auto")
-        self.console = Console(
+        self.console = TermConsole(
             file=stream,
             force_terminal=True if (color == "yes" or force) else None,
             no_color=color == "no",

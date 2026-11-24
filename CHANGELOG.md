@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+- The live view keeps its terminal's width while a test runs: it used to drop to 80 columns then, with
+  `--glow-chat` jumping under it and back.
 - `--glow-adopt`: a pet for the project, for good. Green runs feed it, a week of red kills it.
 - `--glow-chat`: a stream chat beside the live view, reacting to the failures, combos, skips and slow tests.
 - `--glow-roast`: a line of abuse under every failure, from the exception, the values, git blame and its history.

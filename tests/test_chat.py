@@ -1,6 +1,9 @@
 import io
+import os
 import random
+import sys
 
+import pytest
 from rich.console import Console
 
 from pytest_glow import chat
@@ -54,3 +57,22 @@ def test_no_chat_without_a_terminal(pytester):
     result = pytester.runpytest("--glow", "--glow-chat", "--glow-roast")
     out = result.stdout.str()
     assert "1 passed" in out and "watching" not in out and "🔥" not in out
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a pty")
+def test_the_live_view_is_as_wide_as_its_terminal_while_a_test_runs(monkeypatch):
+    import fcntl
+    import struct
+    import termios
+
+    from pytest_glow.reporter import TermConsole
+
+    monkeypatch.delenv("COLUMNS", raising=False)
+    monkeypatch.delenv("LINES", raising=False)
+    master, slave = os.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 150, 0, 0))
+    with os.fdopen(slave, "w") as terminal:
+        # fds 0-2 are pytest's files here, as they are while any test runs: Rich alone would say 80
+        assert Console(file=terminal).width == 80
+        assert TermConsole(file=terminal).width == 150
+    os.close(master)
