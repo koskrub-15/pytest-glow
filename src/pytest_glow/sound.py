@@ -18,7 +18,7 @@ import wave
 from collections.abc import Callable
 
 RATE = 22050
-REVISION = 5  # bump when a sound changes, so the cached files get rebuilt
+REVISION = 6  # bump when a sound changes, so the cached files get rebuilt
 HIT_GAP = 0.12  # at most this often a hit sound, or a fast suite turns into a drum roll
 COMBO_MILESTONES = (10, 25, 50, 100, 250, 500, 1000)
 
@@ -179,6 +179,12 @@ def combo_breaker() -> Samples:
     return mix(tone(660, 0.45, "square", 0.22, to=90, release=0.1, cutoff=2000), seq(rest(0.38), noise(0.15, 0.2)))
 
 
+def skill_issue() -> Samples:
+    """A long combo ends: C-C-C-, then the slide all the way down."""
+    stutter = seq(*(seq(tone(330, 0.05, "square", 0.25, cutoff=2400), rest(0.035)) for _ in range(3)))
+    return seq(stutter, combo_breaker())
+
+
 def hit() -> Samples:
     """A test lands a hit on the boss: a thump and a crack."""
     return mix(tone(200, 0.09, "square", 0.18, to=55, cutoff=1400), noise(0.06, 0.2, decay=45, cutoff=3500))
@@ -229,6 +235,7 @@ SOUNDS: dict[str, Callable[[], Samples]] = {
     "sad_trombone": sad_trombone,
     "airhorn": airhorn,
     "combo_breaker": combo_breaker,
+    "skill_issue": skill_issue,
     "hit": hit,
     "crit": crit,
     "hurt": hurt,

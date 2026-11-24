@@ -14,7 +14,8 @@ flags, same exit codes. You just get to watch them run instead of reading a row 
 - under pytest-xdist, a line per worker: what it's running, for how long, and how many tests it has done
 - an overall progress bar with an ETA, which turns red the moment something fails
 - failures as one-liners as soon as they happen, so you don't wait for the end of the run to see them
-- a combo counter for passes in a row, heating up as it grows, and a COMBO BREAKER when one fails
+- a combo counter for passes in a row, heating up as it grows, and when one fails, the screen comes apart for
+  a moment: C-C-C-COMBO BREAKER, then the diagnosis, SKILL ISSUE
 
 **At the end**
 - rich tracebacks: highlighted source, locals (without pytest's `@py_assert` noise), captured output
@@ -114,8 +115,8 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
   🐇 Speed Demon…), the hours you test at, loot and achievements. Runs no tests
 - `--glow-share`: the run as an SVG card, ready to post
 - `--glow-sound`: 8-bit sounds, synthesized on the fly (nothing to license): a power-up at combo 10, 25, 50,
-  100…, a slide down on a COMBO BREAKER, hits and crits on the boss, then a level-clear jingle, an air horn for
-  a record, or the sad trombone. Hear them all with `python -m pytest_glow.sound`
+  100…, a C-C-C-stutter and a slide down on a COMBO BREAKER, hits and crits on the boss, then a level-clear
+  jingle, an air horn for a record, or the sad trombone. Hear them all with `python -m pytest_glow.sound`
 
 ![--glow-boss on a green run: the boss gets enraged, makes its last stand and falls, drops loot, and you level up](https://github.com/koskrub-15/pytest-glow/raw/main/docs/demo-boss.gif)
 

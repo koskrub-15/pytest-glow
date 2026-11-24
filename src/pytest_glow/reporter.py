@@ -55,6 +55,7 @@ EASTER_EGGS = {69: "nice.", 67: "six seven 🤷"}
 MAX_WORKERS_SHOWN = 8
 COMBO_SHOWN = 10  # passes in a row before the live view starts counting a combo
 COMBO_BROKEN = 1.5  # seconds a broken combo stays on screen
+SKILL_ISSUE = 25  # a combo this long, broken, gets the stutter
 MAX_RERUN_IDS = 3  # beyond this, the rerun hint is `pytest --lf`
 SHINY_ODDS = 1 / 500  # the chance that a green run comes out shiny
 MIN_SAMPLES = 10  # fewer samples of a test than this, and its shares are noise
@@ -683,7 +684,7 @@ class GlowReporter(TerminalReporter):
         elif outcome in render.FAILING and self._fight is not None:
             player.play("hurt")
         elif broke:
-            player.play("combo_breaker")
+            player.play("skill_issue" if broke >= SKILL_ISSUE else "combo_breaker")
         elif self._fight is not None:
             player.hit(crit=combo >= COMBO_SHOWN)
         if self._fight is not None:
@@ -812,6 +813,17 @@ class GlowReporter(TerminalReporter):
                 self._fight.hp = total
                 parts += [Text(""), arena(self._fight, total - self._hits(), failing, now, self._last_hit, self._combo)]
             parts += [Text(""), overall]
+            broken = self._combo_broken
+            if broken is not None and now - broken[1] < render.GLITCH:
+                # the screen comes apart for a moment, a little less every frame
+                rnd = random.Random(int(now * 30))
+                amount = 0.12 * (1 - (now - broken[1]) / render.GLITCH)
+                parts = [
+                    render.glitch(p, amount, rnd)
+                    if isinstance(p, Text)
+                    else Padding(p, (0, 0, 0, rnd.choice((0, 1, 2))))
+                    for p in parts
+                ]
             combo = self._combo_line(now)
             if combo is not None:
                 parts.append(combo)
@@ -1470,6 +1482,8 @@ class GlowReporter(TerminalReporter):
 
     def _combo_line(self, now: float) -> Text | None:
         broken = self._combo_broken
+        if broken is not None and now - broken[1] < render.GLITCH:
+            return render.skill_issue(broken[0], now - broken[1])
         if broken is not None and now - broken[1] < COMBO_BROKEN and self._combo < COMBO_SHOWN:
             return Text.assemble("  ", ("💔 COMBO BREAKER", "bold red"), (f"  ×{broken[0]}", "red"))
         if self._combo < COMBO_SHOWN:

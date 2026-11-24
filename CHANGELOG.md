@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+- A broken combo glitches the live view: C-C-C-COMBO BREAKER, then SKILL ISSUE; a stutter in `--glow-sound`.
 - `--glow-bisect TEST`: the commit that broke a test, by a binary search from the commit it last passed at,
   in a git worktree of its own.
 - `--glow-graph`: the files no test runs code from, as rings apart; colour the files by their coverage.

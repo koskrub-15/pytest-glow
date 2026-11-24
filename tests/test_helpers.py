@@ -186,6 +186,19 @@ def test_personal_best_only_counts_green_runs_of_the_same_size():
     assert history.greens == 1
 
 
+def test_a_broken_combo_glitches_the_screen():
+    import random
+
+    text = render.gradient_text("models/test_models.py ━━━━━━━━━━ 41/41", render.GRADIENTS["green"])
+    torn = render.glitch(text, 0.5, random.Random(3))
+    body = torn.plain.lstrip(" ")
+    assert len(body) == len(text.plain) and body != text.plain
+    assert set(body) - set(text.plain) <= set(render.GLITCH_CHARS)
+    assert render.glitch(text, 0.0, random.Random(3)).plain.strip() == text.plain
+    assert "COMBO BREAKER" in render.skill_issue(42, 0.0).plain
+    assert "S K I L L   I S S U E" in render.skill_issue(42, render.GLITCH * 0.75).plain
+
+
 def test_combos_heat_up():
     assert render.combo_stops(10) == render.GRADIENTS["cyan"]
     assert render.combo_stops(150) == render.GRADIENTS["fire"]

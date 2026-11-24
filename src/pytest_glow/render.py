@@ -512,3 +512,33 @@ class Confetti:
             if y < self.height - 1:
                 text.append("\n")
         return text
+
+
+GLITCH = 0.6  # seconds the live view comes apart when a combo breaks
+GLITCH_CHARS = "▓▒░█▚▞▙▟#%&@$"
+_TEARS = ("#dc2626", "#22d3ee", "#e879f9")
+
+
+def glitch(text: Text, amount: float, rnd) -> Text:
+    """``text`` with some of its characters corrupted, a colour tear or two, and shaken sideways."""
+    chars = [rnd.choice(GLITCH_CHARS) if c not in " \n" and rnd.random() < amount else c for c in text.plain]
+    torn = Text("".join(chars), style=text.style, end=text.end, no_wrap=text.no_wrap, overflow=text.overflow)
+    for span in text.spans:
+        torn.stylize(span.style, span.start, span.end)
+    for _ in range(int(amount * 20)):
+        start = rnd.randrange(max(len(chars), 1))
+        torn.stylize(f"bold {rnd.choice(_TEARS)}", start, start + rnd.randint(2, 8))
+    return Text(" " * rnd.choice((0, 0, 1, 2))) + torn
+
+
+def skill_issue(combo: int, age: float) -> Text:
+    """The banner a broken combo gets: the stutter first, then the diagnosis, flickering."""
+    word = " C-C-C-COMBO BREAKER " if age < GLITCH / 2 else " S K I L L   I S S U E "
+    flicker = int(age * 16) % 2
+    return Text.assemble(
+        "  ",
+        ("▓▒░", "#dc2626"),
+        (word, "bold white on #dc2626" if flicker else "bold #dc2626 on #fde68a"),
+        ("░▒▓", "#dc2626"),
+        (f"  ×{combo} combo, gone", "bold red"),
+    )
