@@ -9,7 +9,9 @@
     --bg: #1b1b1f; --panel: #232329ee; --line: #ffffff14; --text: #dcddde; --dim: #8a8f98;
     --file: #a78bfa; --testfile: #22d3ee; --conftest: #f472b6;
     --passed: #4ade80; --failing: #f87171; --flaky: #fbbf24; --skipped: #94a3b8; --unknown: #64748b;
+    --untested: #9ca3af; --faded: #ffffff26;
   }
+  .warn { color: var(--failing); }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
     font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -51,6 +53,7 @@
   <span class="title">✦ glow graph</span><span class="stats" id="stats"></span>
   <input id="q" placeholder="find a test or a file…" autocomplete="off">
   <button id="group" aria-pressed="false" title="one node per test file">group tests</button>
+  <button id="cov" aria-pressed="false" title="colour the files by their last coverage">coverage</button>
 </div>
 <div class="legend" id="legend"></div>
 <div class="panel" id="panel"></div>
@@ -63,7 +66,8 @@ const panel = document.getElementById("panel");
 let W = 0, H = 0, dpr = 1;
 let view = { x: 0, y: 0, k: 1 };
 let nodes = [], links = [], adj = [];
-let hover = null, picked = null, query = "", grouped = DATA.tests.length > 600;
+let hover = null, picked = null, query = "", grouped = DATA.tests.length > 600, byCoverage = false;
+const untested = new Set(DATA.untested.map(i => DATA.files[i]));
 let alpha = 1, dragging = null, panning = null, moved = false;
 
 const isTestFile = p => /(^|\/)(test_[^/]*|[^/]*_test)\.py$/.test(p);
@@ -71,7 +75,11 @@ const isConftest = p => /(^|\/)conftest\.py$/.test(p);
 const base = p => p.split("/").pop();
 const testName = id => id.split("::").slice(1).join("::") || id;
 
-function fileKind(p) { return isConftest(p) ? "conftest" : isTestFile(p) ? "testfile" : "file"; }
+function fileKind(p) {
+  return untested.has(p) ? "untested" : isConftest(p) ? "conftest" : isTestFile(p) ? "testfile" : "file";
+}
+// red up to 50%, then through yellow (75%) to green at 100%: the difference is in the upper half
+const covColor = pct => `hsl(${Math.round(Math.max(0, pct - 50) * 2.6)}, 78%, 60%)`;
 
 function build() {
   nodes = []; links = [];
@@ -104,7 +112,7 @@ function build() {
     }
   }
   nodes.forEach((n, i) => {
-    n.r = n.kind === "test" ? 3.2 : 4 + Math.sqrt(n.tests.size) * 1.6;
+    n.r = n.kind === "test" ? 3.2 : n.kind === "untested" ? 6 : 4 + Math.sqrt(n.tests.size) * 1.6;
     const a = i * 2.399963, d = 12 * Math.sqrt(i + 1);  // a sunflower to start from
     n.x = Math.cos(a) * d; n.y = Math.sin(a) * d; n.vx = n.vy = 0;
   });
@@ -115,6 +123,10 @@ function build() {
 }
 
 function color(n) {
+  if (byCoverage) {
+    if (n.kind === "file" || n.kind === "untested") return n.id in DATA.cov ? covColor(DATA.cov[n.id]) : C("unknown");
+    return C("faded");
+  }
   if (n.kind === "test") return C(n.t.s);
   if (n.kind === "file") {
     const failing = [...n.tests].some(ti => DATA.tests[ti].s === "failing");
@@ -135,7 +147,14 @@ function stats() {
   let s = `${DATA.tests.length} tests · ${src} files · ${links.length} links`;
   if (top && DATA.mapped) s += ` · hub: ${top.label} (${top.tests.size} tests)`;
   if (DATA.more) s += ` · +${DATA.more} tests not drawn`;
-  document.getElementById("stats").textContent = s;
+  const el = document.getElementById("stats");
+  el.textContent = s;
+  if (DATA.untested.length) {
+    const warn = document.createElement("span");
+    warn.className = "warn";
+    warn.textContent = ` · ${DATA.untested.length} file${DATA.untested.length === 1 ? "" : "s"} no test runs`;
+    el.append(warn);
+  }
 }
 
 function tick() {
@@ -211,7 +230,10 @@ function draw() {
     ctx.globalAlpha = bright ? 1 : .12;
     ctx.fillStyle = color(n);
     if (bright && on && i === focus) { ctx.shadowColor = color(n); ctx.shadowBlur = 18; }
-    ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+    if (n.kind === "untested" && !byCoverage) {  // a ring: nothing runs it, nothing fills it
+      ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 2 / view.k; ctx.stroke();
+    } else ctx.fill();
     ctx.shadowBlur = 0;
   });
   ctx.globalAlpha = 1;
@@ -261,20 +283,24 @@ function show(i) {
   picked = i;
   if (i === null) { panel.classList.remove("open"); return; }
   const n = nodes[i];
-  const item = j => `<li data-i="${j}"><span class="dot" style="background:${color(nodes[j])}"></span>${esc(nodes[j].kind === "test" ? nodes[j].id : nodes[j].id)}</li>`;
+  const item = j => `<li data-i="${j}"><span class="dot" style="background:${color(nodes[j])}"></span>${esc(nodes[j].id)}</li>`;
+  const cov = n.id in DATA.cov ? `<div class="note">covered: <b style="color:${covColor(DATA.cov[n.id])}">${DATA.cov[n.id]}%</b> last time it was measured</div>` : "";
   const near = [...adj[i]].sort((a, b) => nodes[b].tests.size - nodes[a].tests.size);
   let body;
   if (n.kind === "test") {
     body = `<h2>${esc(n.label)}</h2><div class="note">${esc(n.id.split("::")[0])}</div>
       <p>${trail(n.t.o)} ${esc(n.t.s)}${n.t.d != null ? " · " + fmt(n.t.d) : ""}</p>
       <div class="note">runs code from ${near.length} file${near.length === 1 ? "" : "s"}</div><ul>${near.map(item).join("")}</ul>`;
+  } else if (n.kind === "untested") {
+    body = `<h2>${esc(n.id)}</h2><div class="big warn">no test</div>
+      <div class="note">runs code from it: edit it, and nothing notices</div>${cov}`;
   } else {
     const failing = [...n.tests].filter(ti => DATA.tests[ti].s === "failing").length;
     const what = n.kind === "file" ? "edit it, and --glow-affected runs" : n.kind === "conftest" ? "tests under it" : "tests in it";
     body = `<h2>${esc(n.id)}</h2><div class="note">${what}</div>
       <div class="big">${n.tests.size} <span class="note">of ${DATA.tests.length} tests</span></div>
       ${failing ? `<div style="color:${C("failing")}">${failing} failing</div>` : ""}
-      <ul>${near.slice(0, 300).map(item).join("")}</ul>`;
+      ${cov}<ul>${near.slice(0, 300).map(item).join("")}</ul>`;
   }
   if (!DATA.mapped) body += `<div class="note">run the tests once with <b>--glow-affected</b> to see which files each one uses</div>`;
   panel.innerHTML = body;
@@ -321,14 +347,27 @@ groupButton.addEventListener("click", () => {
   grouped = !grouped; groupButton.setAttribute("aria-pressed", grouped); build();
 });
 groupButton.setAttribute("aria-pressed", grouped);
+const covButton = document.getElementById("cov");
+if (!Object.keys(DATA.cov).length) covButton.hidden = true;  // run with --cov once to have it
+covButton.addEventListener("click", () => {
+  byCoverage = !byCoverage; covButton.setAttribute("aria-pressed", byCoverage); legend();
+});
 addEventListener("keydown", e => { if (e.key === "Escape") { show(null); document.getElementById("q").value = query = ""; } });
 addEventListener("resize", resize);
 
-document.getElementById("legend").innerHTML = [
-  ["file", "your code"], ["testfile", "test file"], ["conftest", "conftest"],
-  ["passed", "passing"], ["failing", "failing"], ["flaky", "flaky"], ["unknown", "no history"],
-].map(([k, label]) => `<span><i style="background:${C(k)}"></i>${label}</span>`).join("")
-  + `<span>· size: how many tests use it · click: what it touches · scroll: zoom</span>`;
+function legend() {
+  const keys = byCoverage
+    ? [[covColor(50), "≤50%"], [covColor(75), "75%"], [covColor(90), "90%"], [covColor(100), "100% covered"],
+       [C("unknown"), "not measured"]]
+    : [["file", "your code"], ["testfile", "test file"], ["conftest", "conftest"], ["passed", "passing"],
+       ["failing", "failing"], ["flaky", "flaky"], ["unknown", "no history"]].map(([k, label]) => [C(k), label]);
+  const ring = DATA.untested.length && !byCoverage
+    ? `<span><i style="border:2px solid ${C("untested")};background:none"></i>no test runs it</span>` : "";
+  document.getElementById("legend").innerHTML =
+    keys.map(([c, label]) => `<span><i style="background:${c}"></i>${label}</span>`).join("") + ring
+    + `<span>· size: how many tests use it · click: what it touches · scroll: zoom</span>`;
+}
+legend();
 
 if (!DATA.tests.length) {
   document.body.insertAdjacentHTML("beforeend",

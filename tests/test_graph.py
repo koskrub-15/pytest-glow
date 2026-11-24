@@ -30,6 +30,29 @@ def test_build_from_the_affected_map():
     assert data["links"] == [[0, 0], [0, 1], [1, 1]]  # every test to its own file too
 
 
+def test_the_files_no_test_runs():
+    stored = {
+        "tests": {"tests/test_a.py::test_x": {"app/shop.py": "1"}},
+        "files": {
+            path: [0, size, "h"]
+            for path, size in {
+                "app/shop.py": 10,
+                "app/unused.py": 10,  # no test, not covered: this is the news
+                "app/constants.py": 10,  # run on import, covered: nothing for a test to run
+                "app/__init__.py": 0,
+                "migrations/0001.py": 10,  # not where the code under test is
+                "tests/test_a.py": 10,
+                "tests/conftest.py": 10,
+            }.items()
+        },
+    }
+    h = History(None)
+    h.coverage = {"app/shop.py": 90.0, "app/unused.py": 40.0, "app/constants.py": 100.0}
+    data = graph.build(stored, h, "shop")
+    assert [data["files"][i] for i in data["untested"]] == ["app/unused.py"]
+    assert data["cov"] == {"app/shop.py": 90.0, "app/unused.py": 40.0}
+
+
 def test_build_without_a_map_has_the_tests_by_file():
     data = graph.build({}, history(test_x="P"), "shop")
     assert not data["mapped"] and data["files"] == ["tests/test_a.py"] and data["tests"][0]["s"] == "passed"

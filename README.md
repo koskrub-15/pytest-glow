@@ -98,7 +98,8 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
 - `pytest --glow-graph`: your tests and the code they run, as a graph in the browser, like Obsidian's. Files
   sized by how many tests use them, tests coloured by how they've been doing, hubs in the middle. Click
   a file to see what editing it would run, a test to see what it touches; drag, zoom, search, or group the
-  tests by file. Built from `--glow-affected`'s map, so run with that once first. One HTML file, no network;
+  tests by file. The files no test runs code from stand apart as rings; `coverage` colours the files by
+  their last coverage. Built from `--glow-affected`'s map, so run with that once first. One HTML file, no network;
   `--glow-graph=graph.html` saves it there instead of opening it
 - `pytest --glow-wrapped`: your project's year-in-review. Runs, time spent, green rate, level, records, a hall
   of shame (failed the most, flakiest, slowest), who you were this week (🦉 Night Owl, 🔁 Rerun Goblin, 🩹 Medic,
