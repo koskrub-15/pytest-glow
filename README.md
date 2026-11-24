@@ -136,6 +136,8 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
 
 ![--glow-boss on a green run: the boss gets enraged, makes its last stand and falls, drops loot, and you level up](https://github.com/koskrub-15/pytest-glow/raw/main/docs/demo-boss.gif)
 
+![--glow-chat --glow-roast on a red run: a stream chat beside the live view, a ×42 combo broken into SKILL ISSUE, a roast under each failure, and a sick pet in the verdict](https://github.com/koskrub-15/pytest-glow/raw/main/docs/demo-chat.gif)
+
 ![a green run: combo, a green streak and XP](https://github.com/koskrub-15/pytest-glow/raw/main/docs/demo-green.gif)
 
 ![the end of a run up close: a rich traceback, the diff of the values, coverage with the missing lines, an achievement and the verdict](https://github.com/koskrub-15/pytest-glow/raw/main/docs/screenshot.svg)
