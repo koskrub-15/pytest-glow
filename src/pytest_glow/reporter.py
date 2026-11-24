@@ -191,6 +191,10 @@ class GlowReporter(TerminalReporter):
         self._fixture_time = 0.0
         self._fixture_spent: Counter = Counter()  # in setup and teardown: seconds by library, "your code"…
         self._slept: Counter = Counter()  # nodeid -> seconds in time.sleep
+        # nodeid -> seconds in the setup or teardown of a fixture it shares (session, module…): pytest
+        # puts them on whichever test comes first or last, and they're not that test's own time
+        self._shared: Counter = Counter()
+        self._current: str | None = None  # the test running here, when it runs here and not on a worker
         self._online: dict[str, list[str]] = {}  # "host:port" -> the tests that connected to it
         self._live: Live | None = None
         self._lock = threading.RLock()
@@ -515,6 +519,7 @@ class GlowReporter(TerminalReporter):
     def pytest_runtest_logstart(self, nodeid: str, location: tuple) -> None:
         now = time.monotonic()
         self._compare = None
+        self._current = nodeid
         with self._lock:
             if self._t_run is None:
                 self._t_run = now
@@ -555,9 +560,14 @@ class GlowReporter(TerminalReporter):
         def tearing_down() -> None:
             started.append(time.perf_counter())
 
+        shared = fixturedef.scope != "function"
+
         def torn_down() -> None:
             if started:
-                spent.teardown += time.perf_counter() - started.pop()
+                took = time.perf_counter() - started.pop()
+                spent.teardown += took
+                if shared and self._current:
+                    self._shared[self._current] += took
 
         # finalizers run last-in first-out: these two end up around the fixture's own teardown
         fixturedef.addfinalizer(torn_down)
@@ -565,8 +575,11 @@ class GlowReporter(TerminalReporter):
         try:
             return (yield)
         finally:
-            spent.setup += time.perf_counter() - t0
+            took = time.perf_counter() - t0
+            spent.setup += took
             spent.count += 1
+            if shared and self._current:
+                self._shared[self._current] += took
             fixturedef.addfinalizer(tearing_down)
 
     def pytest_assertrepr_compare(self, config: pytest.Config, op: str, left: Any, right: Any) -> None:
@@ -1535,9 +1548,14 @@ class GlowReporter(TerminalReporter):
             if not ts.finished or ts.outcome not in ("passed", "failed"):
                 continue
             usual = self._history.median_duration(nodeid)
-            if usual and ts.duration >= usual * SLOWER and ts.duration - usual >= 0.1:
-                out.append((nodeid, ts.duration, usual))
+            own = self._own(nodeid, ts)
+            if usual and own >= usual * SLOWER and own - usual >= 0.1:
+                out.append((nodeid, own, usual))
         return sorted(out, key=lambda t: t[1] / t[2], reverse=True)
+
+    def _own(self, nodeid: str, ts: TestState) -> float:
+        """The test's time, less what it spent on fixtures shared with other tests."""
+        return max(ts.duration - self._shared[nodeid], 0.0)
 
     def _failing(self) -> int:
         failing = sum(self._counts[c] for c in render.FAILING) + len(self._collect_errors)
@@ -1842,7 +1860,9 @@ class GlowReporter(TerminalReporter):
     def _save_history(self, exitstatus: int) -> None:
         if not self._history.enabled or not self._done or exitstatus == pytest.ExitCode.INTERRUPTED:
             return
-        results = {nodeid: (ts.outcome or "passed", ts.duration) for nodeid, ts in self._tests.items() if ts.finished}
+        results = {
+            nodeid: (ts.outcome or "passed", self._own(nodeid, ts)) for nodeid, ts in self._tests.items() if ts.finished
+        }
         failing = self._failing()
         measured = None
         if self._coverage is not None:
