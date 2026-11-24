@@ -1,3 +1,5 @@
+import io
+
 import pytest
 
 from pytest_glow import pet
@@ -58,3 +60,27 @@ def test_the_pet_stays_out_of_ci(pytester):
     result = pytester.runpytest("--glow")
     assert "Bob" not in result.stdout.str()
     assert pet.load(str(pytester.path))["meals"] == 0  # not fed by a run nobody watched
+
+
+def _plain(renderable, width=100):
+    from rich.console import Console
+
+    console = Console(width=width, record=True, file=io.StringIO())
+    console.print(renderable)
+    return console.export_text()
+
+
+def test_the_pet_has_a_box_of_its_own(tmp_path):
+    p = pet.adopt(str(tmp_path), "Bob", now=0)
+    p["species"] = 3  # the cat
+    assert "an egg · hatches on the first green run" in _plain(pet.card(p, 0))
+    for _ in range(6):
+        events = pet.live(p, True, DAY)
+    box = _plain(pet.card(p, 3 * DAY, events))
+    assert "( •.• )" in box and "Bob  the kid cat" in box and "ate a green run" in box
+    assert "3 days old" in box and "6 meals" in box and "teen in 9" in box and "6 green in a row · best 6" in box
+    pet.live(p, False, 3 * DAY)
+    box = _plain(pet.card(p, 5 * DAY))
+    assert "( ×.× )" in box and "sick · dies in 5 days" in box and "sick 1 time" in box
+    pet.live(p, False, 11 * DAY)
+    assert "RIP" in _plain(pet.card(p, 11 * DAY, ["died"]))
