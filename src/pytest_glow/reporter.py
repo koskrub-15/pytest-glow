@@ -18,7 +18,7 @@ from typing import IO, Any
 
 import pytest
 from _pytest.terminal import TerminalReporter
-from rich.console import Console, Group
+from rich.console import Console, ConsoleDimensions, Group
 from rich.live import Live
 from rich.padding import Padding
 from rich.panel import Panel
@@ -56,6 +56,7 @@ MAX_WORKERS_SHOWN = 8
 COMBO_SHOWN = 10  # passes in a row before the live view starts counting a combo
 COMBO_BROKEN = 1.5  # seconds a broken combo stays on screen
 SKILL_ISSUE = 25  # a combo this long, broken, gets the stutter
+PET_BOX_FROM = 80  # columns for the pet's own box under the verdict; a narrower terminal gets its line
 MAX_RERUN_IDS = 3  # beyond this, the rerun hint is `pytest --lf`
 SHINY_ODDS = 1 / 500  # the chance that a green run comes out shiny
 MIN_SAMPLES = 10  # fewer samples of a test than this, and its shares are noise
@@ -179,11 +180,32 @@ class _LiveView:
         return self.reporter._render_live()
 
 
+class TermConsole(Console):
+    """Sized by the terminal it writes to. Rich asks fds 0-2, which pytest swaps for files while a test runs:
+    the live view, drawn then, would come out 80 columns wide, the chat under it, jumping back between tests."""
+
+    @property
+    def size(self) -> ConsoleDimensions:
+        if self._width is None or self._height is None:
+            try:
+                width, height = os.get_terminal_size(self.file.fileno())
+            except (AttributeError, ValueError, OSError):
+                pass
+            else:
+                if width and height:
+                    return ConsoleDimensions(self._width or width, self._height or height)
+        return super().size
+
+    @size.setter
+    def size(self, new_size: tuple[int, int]) -> None:
+        Console.size.fset(self, new_size)
+
+
 class GlowReporter(TerminalReporter):
     def __init__(self, config: pytest.Config, stream: IO[str], force: bool = False) -> None:
         super().__init__(config, stream)
         color = config.getoption("color", "auto")
-        self.console = Console(
+        self.console = TermConsole(
             file=stream,
             force_terminal=True if (color == "yes" or force) else None,
             no_color=color == "no",
@@ -1853,8 +1875,12 @@ class GlowReporter(TerminalReporter):
                 lines.append(progress.xp_line(*self._xp))
             if self._quests is not None:
                 lines += quests.lines(self._quests, self._quests_done)
+        pet_card = None
         if self._pet is not None and self._done and exitstatus != pytest.ExitCode.INTERRUPTED:
-            lines.append(pet.line(self._pet, time.time(), self._pet_events))
+            if self.console.width >= PET_BOX_FROM:
+                pet_card = pet.card(self._pet, time.time(), self._pet_events)
+            else:
+                lines.append(pet.line(self._pet, time.time(), self._pet_events))
 
         self.console.print()
         if self._failures and not getattr(self, "no_summary", False):
@@ -1909,6 +1935,8 @@ class GlowReporter(TerminalReporter):
                     live.update(frame(elapsed))
                     time.sleep(1 / 60)
         self.console.print(panel())
+        if pet_card is not None:
+            self.console.print(pet_card)
         if self._share:
             self._save_card(icon, word, stops, counts, lines[1:])
         if self._player is not None and self._done:

@@ -117,10 +117,11 @@ flaky tests and the slowest ones. `PYTEST_GLOW_SUMMARY=0` or `glow_summary = fal
   🐇 Speed Demon…), the hours you test at, loot and achievements. Runs no tests
 - `pytest --glow-adopt`: a pet for the project, and it's forever. It asks once; you sign by naming it, and
   there's no `--glow-abandon`. It lives outside the project's cache, so wiping that won't get rid of it. Every
-  green run feeds it: an egg hatches into a rubber duck `__(•<`, a bug `ϵ('Θ')϶`, a crab, a cat or a blob, and
-  it grows up from hatchling to elder. A red run makes it sick (`(=;ω;=) Pickle is sick ♥♥♥♡♡ · dies in 3 days
-  without a green run`), and a week of nothing but red kills it: 🪦. It shows in the verdict of the runs you
-  watch in a terminal, never in CI's
+  green run feeds it: an egg hatches into a rubber duck, a bug, a crab, a cat or a blob, and it grows up from
+  hatchling to elder, a new hat at most stages. A red run makes it sick, `× ×` eyes and a countdown (`dies in
+  3 days without a green run`), and a week of nothing but red kills it: a tombstone. It gets a box of its own
+  under the verdict of the runs you watch in a terminal, never in CI's: big ASCII art, hearts, age, meals and
+  the next stage, its green streak, how often it's been sick, its mood today and the pets before it
 - `--glow-chat`: a stream chat beside the live view, `● LIVE · 1.2k watching`. The viewers are made up; what they
   react to isn't: `F in chat` and `who wrote test_vat` on a failure, `NOOOO the ×42` when it breaks a combo,
   `is the database in the room with us` on a ConnectionError, `ResidentSleeper` for a test past 3 seconds, `×50
