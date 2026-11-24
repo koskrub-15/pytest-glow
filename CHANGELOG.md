@@ -11,6 +11,8 @@ All notable changes to this project are documented here. The format follows
 - `--glow-roast`: a line of abuse under every failure, from the exception, the values, git blame and its history.
 - Speedrun splits: every file against its best time, `▼200ms GOLD` or `▲100ms`, gold splits in the verdict.
 - A broken combo glitches the live view: C-C-C-COMBO BREAKER, then SKILL ISSUE; a stutter in `--glow-sound`.
+- "slower than usual" no longer blames a test for a shared fixture's setup or teardown that pytest ran in its
+  turn; the history keeps each test's own time.
 - `--glow-bisect TEST`: the commit that broke a test, by a binary search from the commit it last passed at,
   in a git worktree of its own.
 - `--glow-graph`: the files no test runs code from, as rings apart; colour the files by their coverage.

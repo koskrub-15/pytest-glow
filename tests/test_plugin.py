@@ -417,6 +417,18 @@ def test_slower_than_usual(pytester, monkeypatch):
     assert "🐢 slower  test_s.py::test_nap" in out and "usually" in out
 
 
+def test_a_shared_fixture_doesnt_make_a_test_slower(pytester):
+    pytester.makeconftest(
+        "import time, pytest\n\n"
+        "@pytest.fixture(scope='session')\ndef app():\n    time.sleep(0.3)\n    yield\n    time.sleep(0.3)\n"
+    )
+    pytester.makepyfile(test_s="def test_a(app): pass\n\ndef test_b(): pass\n")
+    for _ in range(3):
+        run(pytester, "--glow", "-p", "no:randomly", "-k", "test_b")
+    _, out = run(pytester, "--glow", "-p", "no:randomly")  # app's teardown comes after test_b
+    assert "slower" not in out
+
+
 def _git_repo(pytester):
     import subprocess
 
